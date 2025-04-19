@@ -140,67 +140,82 @@ module.exports = {
 
                 // --- Create QuickChart Configuration ---
                 const chartConfig = {
-                    type: "horizontalBar", // Horizontal bar chart
+                    type: "horizontalBar",
                     data: {
-                        labels: ["Kill Points (KP)", "Dead Troops"], // Labels for each bar
+                        labels: ["Kill Points (KP)", "Dead Troops"],
                         datasets: [
                             {
-                                label: "Progress (%)", // Legend label
+                                label: "Progress (%)",
                                 data: [
                                     kpPercentage.toFixed(1),
                                     deathPercentage.toFixed(1),
-                                ], // Data points (percentages)
+                                ],
                                 backgroundColor: [
-                                    "rgba(75, 192, 192, 0.6)", // Teal color for KP
-                                    "rgba(255, 99, 132, 0.6)", // Red color for Deaths
+                                    "rgba(88, 101, 242, 0.8)", // Discord Blurple for KP
+                                    "rgba(235, 69, 158, 0.8)", // Vibrant pink for Deaths
                                 ],
                                 borderColor: [
-                                    "rgba(75, 192, 192, 1)",
-                                    "rgba(255, 99, 132, 1)",
+                                    "rgba(88, 101, 242, 1)",
+                                    "rgba(235, 69, 158, 1)",
                                 ],
-                                borderWidth: 1,
+                                borderWidth: 2,
+                                borderRadius: 4,
                             },
                         ],
                     },
                     options: {
                         title: {
                             display: true,
-                            text: "DKP Target Progress", // Chart title
-                            fontSize: 16,
-                            fontColor: "#ffffff", // White title text
+                            text: "DKP Target Progress",
+                            fontSize: 18,
+                            fontColor: "#ffffff",
+                            padding: 20,
                         },
                         legend: {
-                            display: false, // Hide legend, labels are clear enough
+                            display: false,
                         },
                         scales: {
                             xAxes: [
                                 {
                                     ticks: {
-                                        beginAtZero: true, // Start axis at 0
-                                        max: 100, // End axis at 100 (for percentage)
-                                        fontColor: "#ffffff", // White axis labels
+                                        beginAtZero: true,
+                                        max: 100,
+                                        fontColor: "#ffffff",
+                                        fontSize: 12,
+                                        padding: 10,
                                     },
                                     gridLines: {
-                                        color: "rgba(255, 255, 255, 0.2)", // Lighter grid lines
+                                        color: "rgba(255, 255, 255, 0.1)",
+                                        zeroLineColor: "rgba(255, 255, 255, 0.25)",
                                     },
                                 },
                             ],
                             yAxes: [
                                 {
                                     ticks: {
-                                        fontColor: "#ffffff", // White axis labels (KP, Deaths)
+                                        fontColor: "#ffffff",
+                                        fontSize: 12,
+                                        padding: 10,
                                     },
                                     gridLines: {
-                                        color: "rgba(255, 255, 255, 0.2)", // Lighter grid lines
+                                        color: "rgba(255, 255, 255, 0.1)",
+                                        zeroLineColor: "rgba(255, 255, 255, 0.25)",
                                     },
                                 },
                             ],
                         },
-                        // Add background color to the chart area
                         plugins: {
                             chartArea: {
-                                backgroundColor: "rgba(54, 57, 63, 1)", // Discord dark theme background-ish
+                                backgroundColor: "rgba(44, 47, 51, 1)", // Darker Discord theme
                             },
+                        },
+                        layout: {
+                            padding: {
+                                left: 15,
+                                right: 15,
+                                top: 15,
+                                bottom: 15
+                            }
                         },
                     },
                 };
@@ -217,10 +232,11 @@ module.exports = {
 
                 // --- Build Embed ---
                 const statsEmbed = new EmbedBuilder()
-                    .setColor(0x1f8b4c) // Slightly different green
+                    .setColor(0x5865F2) // Discord Blurple
                     .setTitle(embedTitle)
-                    .setImage(chartUrl) // Set the chart image
-                    .setTimestamp();
+                    .setImage(chartUrl)
+                    .setTimestamp()
+                    .setFooter({ text: 'DKP Stats Tracking System • 2921' });
 
                 // --- Add Fields (Keep text values for clarity) ---
                 statsEmbed.addFields(
