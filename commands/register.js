@@ -60,11 +60,12 @@ async function showConfirmationPublic(
     // If account type is 'farm'
     confirmEmbed.addFields({
       name: "Is Filler?", // Original field name
-      value: data.isFiller ? "Yes" : "No", // Original values
+      value: data.isFiller === null ? "N/A" : data.isFiller ? "Yes" : "No", // Handle null case
       inline: true,
     });
     // Display the linked Main ID (matches original logic)
     if (farmNeedsModalId) {
+      // This flag might not be relevant anymore if modal always follows filler selection
       confirmEmbed.addFields({
         name: "Linked Main ID",
         value: "(Will be collected via modal)", // Original text
@@ -513,21 +514,23 @@ module.exports = {
               nextContent = `You selected: **Main Account**. Please select your status:`; // Original text
               nextComponents = [statusRow, buttonRowType]; // Show status menu + back/cancel buttons
             } else if (registrationData.tipeAkun === "farm") {
-              // --- STEP 2b: FARM FILLER SELECTION (Matches original UI) ---
-              const fillerYesButton = new ButtonBuilder()
-                .setCustomId("register_farm_filler_yes")
-                .setLabel("Yes, it IS a Filler") // Original label
-                .setStyle(ButtonStyle.Success);
-              const fillerNoButton = new ButtonBuilder()
-                .setCustomId("register_farm_filler_no")
-                .setLabel("No, it is NOT a Filler") // Original label
-                .setStyle(ButtonStyle.Secondary);
+              // --- STEP 2b: FARM FILLER SELECTION (Using Dropdown like original) ---
+              const fillerSelect = new StringSelectMenuBuilder() // Use Select Menu
+                .setCustomId("register_select_farm_filler") // New Custom ID for the menu
+                .setPlaceholder("Is this account a Filler account?") // Placeholder
+                .addOptions(
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel("Yes, it IS a Filler") // Option Label
+                    .setValue("yes"), // Simple value
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel("No, it is NOT a Filler") // Option Label
+                    .setValue("no") // Simple value
+                );
               const fillerRow = new ActionRowBuilder().addComponents(
-                fillerYesButton,
-                fillerNoButton
-              ); // Yes/No buttons
+                fillerSelect
+              ); // Row for the select menu
               nextContent = `You selected: **Farm Account**. Is this account a Filler account?`; // Original text
-              nextComponents = [fillerRow, buttonRowType]; // Display filler buttons + back/cancel buttons
+              nextComponents = [fillerRow, buttonRowType]; // Display select menu + back/cancel buttons
             }
 
             // Update the message with the next step
@@ -625,13 +628,11 @@ module.exports = {
               collector.stop("timeout");
             }
           }
-          // --- Handle Farm Filler Selection (Matches original structure) ---
-          else if (
-            i.customId === "register_farm_filler_yes" ||
-            i.customId === "register_farm_filler_no"
-          ) {
-            registrationData.isFiller =
-              i.customId === "register_farm_filler_yes";
+          // --- Handle Farm Filler Selection (Using Dropdown) ---
+          else if (i.customId === "register_select_farm_filler") {
+            // Check for the new select menu ID
+            const selectedValue = i.values[0]; // Get the selected value ("yes" or "no")
+            registrationData.isFiller = selectedValue === "yes"; // Set boolean based on value
             console.log(
               `[DEBUG] ${new Date().toISOString()} - Filler status selected: ${
                 registrationData.isFiller
@@ -657,7 +658,7 @@ module.exports = {
             );
             modal.addComponents(actionRowModal);
 
-            // Display the modal to the user ('i' is the button interaction)
+            // Display the modal to the user ('i' is the select menu interaction)
             await i.showModal(modal);
             // The flow continues when the modal is submitted
           }
