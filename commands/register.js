@@ -17,8 +17,9 @@ const {
 const fetch = require("node-fetch"); // Ensure node-fetch v2 is installed (npm install node-fetch@2)
 
 // --- CHANNEL LOCK & TIMEOUT ---
-// Set to track channels with active registrations
-const activeRegistrationChannels = new Set(); // Kunci ditambahkan di sini
+// REMOVED: const activeRegistrationChannels = new Set();
+// The Set is now managed centrally in index.js and passed as an argument.
+
 // Set global timeout (5 minutes in milliseconds)
 const MESSAGE_AWAIT_TIMEOUT = 300000; // 300,000 ms = 5 minutes
 const MODAL_AWAIT_TIMEOUT = 240000; // Timeout for modal submission (e.g., 4 minutes)
@@ -209,8 +210,10 @@ module.exports = {
    * The main function executed when the /register command is run.
    * @param {import('discord.js').ChatInputCommandInteraction} interaction - The command interaction.
    * @param {string} appsScriptUrl - Your Google Apps Script Web App URL.
+   * @param {Set<string>} activeRegistrationChannels - The Set managing active channel locks (passed from index.js).
    */
-  async execute(interaction, appsScriptUrl) {
+  async execute(interaction, appsScriptUrl, activeRegistrationChannels) {
+    // <-- Added 3rd argument
     // 'interaction' here is the original ChatInputCommandInteraction
     const channelId = interaction.channel.id;
     const userId = interaction.user.id;
@@ -221,6 +224,7 @@ module.exports = {
     );
 
     // --- CHANNEL LOCK CHECK ---
+    // Check the Set passed from index.js
     if (activeRegistrationChannels.has(channelId)) {
       await interaction.reply({
         content:
@@ -228,21 +232,22 @@ module.exports = {
         ephemeral: true,
       });
       console.log(
-        `[WARN] ${new Date().toISOString()} - /register blocked in channel ${channelId} due to active registration.`
+        `[WARN] ${new Date().toISOString()} - /register blocked in channel ${channelId} due to active registration (checked shared Set).`
       );
       return; // Stop execution if channel is locked
     }
     // --- END CHANNEL LOCK CHECK ---
 
     // If not locked, add the channel to the Set (lock the channel)
-    // KUNCI DITAMBAHKAN DI SINI
+    // Add to the Set passed from index.js
     activeRegistrationChannels.add(channelId);
     console.log(
-      `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} locked for registration.`
+      `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} locked for registration (added to shared Set).`
     );
 
     // NOTE: The 'finally' block for releasing the lock is REMOVED here.
-    // Lock release MUST be handled in index.js where the flow concludes.
+    // Lock release MUST be handled in index.js where the flow concludes
+    // or encounters an error before passing control back.
     try {
       // --- START MAIN LOGIC ---
 
@@ -258,9 +263,10 @@ module.exports = {
           deferError
         );
         // --- KUNCI DIHAPUS JIKA DEFER GAGAL ---
+        // Unlock the channel using the passed Set
         activeRegistrationChannels.delete(channelId);
         console.log(
-          `[DEBUG] Channel ${channelId} unlocked due to defer error.`
+          `[DEBUG] Channel ${channelId} unlocked due to defer error (in register.js).`
         );
         // ---
         if (!interaction.replied && !interaction.deferred) {
@@ -329,9 +335,10 @@ module.exports = {
           editErr
         );
         // --- KUNCI DIHAPUS JIKA EDITREPLY AWAL GAGAL ---
+        // Unlock the channel using the passed Set
         activeRegistrationChannels.delete(channelId);
         console.log(
-          `[DEBUG] Channel ${channelId} unlocked due to initial editReply error.`
+          `[DEBUG] Channel ${channelId} unlocked due to initial editReply error (in register.js).`
         );
         // ---
         if (interaction.editable) {
@@ -353,6 +360,7 @@ module.exports = {
       const filter = (i) => i.user.id === userId;
 
       // Create a collector primarily for timeout detection on the initial message
+      // Note: Actual interaction handling is now primarily in index.js
       const collector = initialReply.createMessageComponentCollector({
         filter,
         time: MESSAGE_AWAIT_TIMEOUT * 2, // Long timeout, actual step timeouts handled in index.js
@@ -363,7 +371,7 @@ module.exports = {
       collector.on("collect", async (i) => {
         // Log collection but expect index.js to handle the interaction logic
         console.log(
-          `[DEBUG] ${new Date().toISOString()} - Collector observed interaction: ${
+          `[DEBUG] ${new Date().toISOString()} - Collector (in register.js) observed interaction: ${
             i.customId
           } from user ${i.user.id} on message ${
             initialReply.id
@@ -375,15 +383,15 @@ module.exports = {
       // --- COLLECTOR END LOGIC ---
       collector.on("end", (collected, reason) => {
         console.log(
-          `[DEBUG] ${new Date().toISOString()} - Registration collector for message ${
+          `[DEBUG] ${new Date().toISOString()} - Registration collector (in register.js) for message ${
             initialReply.id
           } ended. Reason: ${reason}.`
         );
 
         // --- PENGHAPUSAN KUNCI DIHAPUS DARI SINI ---
-        // activeRegistrationChannels.delete(channelId);
-        // console.log( `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked via collector end.` );
-        // ---
+        // Lock release is now handled by index.js upon completion, cancellation, or error.
+        // activeRegistrationChannels.delete(channelId); // DO NOT UNLOCK HERE
+        // console.log( `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked via collector end.` ); // Incorrect log
 
         // Optional: Check if the message still exists and might need cleanup if timeout occurred
         // But rely on index.js to handle the primary cleanup and lock release.
@@ -418,9 +426,10 @@ module.exports = {
         error
       );
       // --- KUNCI DIHAPUS JIKA TERJADI ERROR BESAR ---
+      // Unlock the channel using the passed Set
       activeRegistrationChannels.delete(channelId);
       console.log(
-        `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked due to major error.`
+        `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked due to major error (in register.js).`
       );
       // ---
       try {

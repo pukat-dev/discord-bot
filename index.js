@@ -1,4 +1,4 @@
-// index.js (Complete English Version with Fixes v3 - Channel Lock Handling)
+// index.js (Complete English Version with Fixes v4 - Shared Channel Lock)
 require("dotenv").config(); // Ensure environment variables/secrets are loaded
 const {
   Client,
@@ -24,7 +24,8 @@ const fetch = require("node-fetch"); // Ensure node-fetch@2 is installed if usin
 // State management
 const registrationState = new Map();
 // --- CHANNEL LOCK MANAGEMENT ---
-// Define the Set here to be managed by index.js
+// Define the Set HERE to be managed centrally by index.js
+// This Set will be passed to the register command.
 const activeRegistrationChannels = new Set();
 // ---
 
@@ -283,10 +284,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // --- PASS activeRegistrationChannels TO COMMAND EXECUTE ---
       // Pastikan command 'register' menerima argumen ketiga
       if (interaction.commandName === "register") {
+        // Pass the centrally managed Set to the command
         await command.execute(
           interaction,
           appsScriptUrl,
-          activeRegistrationChannels
+          activeRegistrationChannels // <-- Pass the Set here
         );
       } else {
         // Untuk command lain yang mungkin tidak memerlukan lock management
@@ -299,6 +301,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         error
       );
       // --- HAPUS KUNCI JIKA EKSEKUSI COMMAND GAGAL (terutama untuk register) ---
+      // Unlock is handled here using the central Set
       if (interaction.commandName === "register" && channelId) {
         activeRegistrationChannels.delete(channelId);
         console.log(
@@ -361,7 +364,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (customId.startsWith("register_") && channelId) {
             const currentState = registrationState.get(messageId);
             if (currentState && currentState.userId === interaction.user.id) {
-              activeRegistrationChannels.delete(channelId);
+              activeRegistrationChannels.delete(channelId); // Use central Set
               registrationState.delete(messageId);
               console.log(
                 `[DEBUG] Channel ${channelId} unlocked due to select menu defer error.`
@@ -397,8 +400,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
           // --- HAPUS KUNCI JIKA STATE TIDAK VALID ---
           if (currentState && channelId === currentState.channelId) {
-            // Pastikan channel cocok
-            activeRegistrationChannels.delete(channelId);
+            activeRegistrationChannels.delete(channelId); // Use central Set
             console.log(
               `[DEBUG] Channel ${channelId} unlocked due to state mismatch (main status).`
             );
@@ -453,7 +455,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           );
           // --- HAPUS KUNCI JIKA STATE TIDAK VALID ---
           if (currentState && channelId === currentState.channelId) {
-            activeRegistrationChannels.delete(channelId);
+            activeRegistrationChannels.delete(channelId); // Use central Set
             console.log(
               `[DEBUG] Channel ${channelId} unlocked due to state mismatch (filler status).`
             );
@@ -513,7 +515,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // --- HAPUS KUNCI JIKA ERROR ---
       const currentState = registrationState.get(messageId);
       if (currentState && channelId === currentState.channelId) {
-        activeRegistrationChannels.delete(channelId);
+        activeRegistrationChannels.delete(channelId); // Use central Set
         registrationState.delete(messageId); // Hapus state juga
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to select menu error.`
@@ -572,7 +574,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
         // --- HAPUS KUNCI SAAT CANCEL ---
         if (currentState && channelId === currentState.channelId) {
-          activeRegistrationChannels.delete(channelId);
+          activeRegistrationChannels.delete(channelId); // Use central Set
           console.log(
             `[DEBUG] Channel ${channelId} unlocked due to user cancellation.`
           );
@@ -623,7 +625,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // --- HAPUS KUNCI JIKA ERROR TOMBOL ---
       const currentState = registrationState.get(messageId);
       if (currentState && channelId === currentState.channelId) {
-        activeRegistrationChannels.delete(channelId);
+        activeRegistrationChannels.delete(channelId); // Use central Set
         registrationState.delete(messageId);
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to button error.`
@@ -707,7 +709,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         // --- HAPUS KUNCI JIKA USER MISMATCH ---
         const currentState = registrationState.get(messageId);
         if (currentState && channelId === currentState.channelId) {
-          activeRegistrationChannels.delete(channelId);
+          activeRegistrationChannels.delete(channelId); // Use central Set
           registrationState.delete(messageId);
           console.log(
             `[DEBUG] Channel ${channelId} unlocked due to modal user mismatch.`
@@ -737,7 +739,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
         // --- HAPUS KUNCI JIKA STATE TIDAK VALID ---
         if (currentState && channelId === currentState.channelId) {
-          activeRegistrationChannels.delete(channelId);
+          activeRegistrationChannels.delete(channelId); // Use central Set
           console.log(
             `[DEBUG] Channel ${channelId} unlocked due to modal state mismatch.`
           );
@@ -782,7 +784,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           );
           // --- HAPUS KUNCI JIKA PESAN ASLI HILANG ---
           if (channelId === currentState.channelId) {
-            activeRegistrationChannels.delete(channelId);
+            activeRegistrationChannels.delete(channelId); // Use central Set
             console.log(
               `[DEBUG] Channel ${channelId} unlocked due to missing original message after modal.`
             );
@@ -849,7 +851,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
         // --- HAPUS KUNCI JIKA EDIT GAGAL ---
         if (channelId === currentState.channelId) {
-          activeRegistrationChannels.delete(channelId);
+          activeRegistrationChannels.delete(channelId); // Use central Set
           console.log(
             `[DEBUG] Channel ${channelId} unlocked due to failed edit after modal.`
           );
@@ -870,7 +872,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // --- HAPUS KUNCI JIKA ERROR MODAL UMUM ---
       const currentState = registrationState.get(messageId); // Ambil messageId lagi jika perlu
       if (currentState && channelId === currentState.channelId) {
-        activeRegistrationChannels.delete(channelId);
+        activeRegistrationChannels.delete(channelId); // Use central Set
         registrationState.delete(messageId);
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to modal submit error.`
@@ -949,7 +951,7 @@ client.on(Events.MessageCreate, async (message) => {
         );
         // Jika gagal mengirim pesan proses, kemungkinan ada masalah channel, hentikan dan hapus kunci
         if (channelId) {
-          activeRegistrationChannels.delete(channelId);
+          activeRegistrationChannels.delete(channelId); // Use central Set
           registrationState.delete(repliedToMessageId);
           console.log(
             `[DEBUG] Channel ${channelId} unlocked due to processing message failure.`
@@ -1111,7 +1113,7 @@ client.on(Events.MessageCreate, async (message) => {
           // --- HAPUS STATE DAN KUNCI SETELAH SUKSES ---
           registrationState.delete(repliedToMessageId);
           if (channelId) {
-            activeRegistrationChannels.delete(channelId);
+            activeRegistrationChannels.delete(channelId); // Use central Set
             console.log(
               `[INFO] Registration state cleared and channel ${channelId} unlocked successfully for message ${repliedToMessageId}`
             );
@@ -1139,7 +1141,7 @@ client.on(Events.MessageCreate, async (message) => {
           // --- HAPUS STATE DAN KUNCI SETELAH GAGAL DARI GAS ---
           registrationState.delete(repliedToMessageId);
           if (channelId) {
-            activeRegistrationChannels.delete(channelId);
+            activeRegistrationChannels.delete(channelId); // Use central Set
             console.log(
               `[INFO] Registration state cleared and channel ${channelId} unlocked due to Apps Script failure for message ${repliedToMessageId}`
             );
@@ -1166,7 +1168,7 @@ client.on(Events.MessageCreate, async (message) => {
         // --- HAPUS STATE DAN KUNCI SETELAH ERROR INTERNAL ---
         registrationState.delete(repliedToMessageId);
         if (channelId) {
-          activeRegistrationChannels.delete(channelId);
+          activeRegistrationChannels.delete(channelId); // Use central Set
           console.log(
             `[INFO] Registration state cleared and channel ${channelId} unlocked due to internal error for message ${repliedToMessageId}`
           );
