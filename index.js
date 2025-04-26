@@ -1,4 +1,4 @@
-// index.js (Complete English Version with Fixes v6 - Fixed Cancel Lock)
+// index.js (Complete English Version with Fixes v7 - Fixed Cancel Lock Logic)
 require("dotenv").config(); // Ensure environment variables/secrets are loaded
 const {
   Client,
@@ -614,34 +614,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
       );
 
       if (customId === "register_cancel") {
-        const currentState = registrationState.get(messageId);
-        // Edit the deferred reply
+        // Edit the deferred reply first
         await interaction.editReply({
           content: "❌ Registration process cancelled.", // English
           embeds: [],
           components: [],
         });
+
         // --- UNLOCK CHANNEL ON CANCEL ---
-        // Check if state exists and channel matches before unlocking
-        if (currentState && channelId === currentState.channelId) {
-          // Check if the lock actually exists before attempting to delete
+        // Prioritize removing the channel lock, regardless of state finding.
+        if (channelId) {
+          // Ensure we have a channel ID from the interaction
           if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // <-- THE FIX: Actually delete the lock
+            activeRegistrationChannels.delete(channelId); // Delete the lock for this channel
             console.log(
-              `[DEBUG] Channel ${channelId} unlocked due to user cancellation.` // Log is now accurate
+              `[DEBUG] Channel ${channelId} unlocked due to user cancellation.`
             );
           } else {
+            // Log if the lock was already gone (e.g., due to timeout or previous error)
             console.log(
               `[DEBUG] Channel ${channelId} was already unlocked when cancel was processed.`
             );
           }
         } else {
-          console.log(
-            `[DEBUG] State not found or channel mismatch for cancel button (Message ID: ${messageId}). Lock not removed.`
+          // Log if channelId couldn't be determined from interaction (should be rare)
+          console.warn(
+            `[WARN] Could not get channelId from cancel button interaction ${interaction.id}. Lock not removed.`
           );
         }
-        // Always clean up state map entry for this message ID on cancel
-        registrationState.delete(messageId);
+
+        // --- CLEANUP STATE MAP ---
+        // Also attempt to clean up the specific state entry if it exists for this message
+        if (registrationState.has(messageId)) {
+          registrationState.delete(messageId);
+          console.log(
+            `[DEBUG] State for message ${messageId} deleted due to cancellation.`
+          );
+        } else {
+          // Log if state was already gone
+          console.log(
+            `[DEBUG] State for message ${messageId} was already deleted or not found upon cancellation.`
+          );
+        }
         // ---
       } else if (customId === "register_back_to_type") {
         // Delete state when going back, but DO NOT unlock channel yet
@@ -687,15 +701,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
         error
       );
       // --- UNLOCK CHANNEL ON BUTTON ERROR ---
-      const currentState = registrationState.get(messageId);
-      if (currentState && channelId === currentState.channelId) {
+      const currentState = registrationState.get(messageId); // Try to get state for channel check
+      if (channelId) {
+        // Use channelId from interaction
         if (activeRegistrationChannels.has(channelId)) {
           activeRegistrationChannels.delete(channelId); // Use central Set
           console.log(
             `[DEBUG] Channel ${channelId} unlocked due to button error.`
           );
         }
-        registrationState.delete(messageId); // Clean state
+        // Attempt to clean up state even if lock removal failed or wasn't needed
+        if (currentState && channelId === currentState.channelId) {
+          registrationState.delete(messageId); // Clean state only if channel matches
+          console.log(
+            `[DEBUG] State for message ${messageId} deleted due to button error.`
+          );
+        } else if (registrationState.has(messageId)) {
+          // If state exists but channel doesn't match, still remove the state for this message
+          registrationState.delete(messageId);
+          console.log(
+            `[DEBUG] State for message ${messageId} deleted due to button error (channel mismatch).`
+          );
+        }
+      } else {
+        console.warn(
+          `[WARN] Could not get channelId from button interaction ${interaction.id} on error. Lock/State not reliably removed.`
+        );
+        // Attempt to remove state anyway if messageId is known
+        if (registrationState.has(messageId)) {
+          registrationState.delete(messageId);
+          console.log(
+            `[DEBUG] State for message ${messageId} deleted due to button error (channelId unknown).`
+          );
+        }
       }
       // ---
       // Send error feedback (interaction should be deferred)
