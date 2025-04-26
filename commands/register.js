@@ -323,12 +323,20 @@ module.exports = {
         );
 
         try {
+          // --- MODIFIED: Defer Component Interaction First ---
+          // Defer update for component/modal interactions ('i') first to acknowledge
+          if (!i.deferred) {
+            await i.deferUpdate();
+            console.log(`[DEBUG] Interaction ${i.customId} deferred.`);
+          }
+          // --- END MODIFICATION ---
+
           // --- Handle Modal Submit (Farm ID) (Matches original structure) ---
           if (
             i.type === InteractionType.ModalSubmit &&
             i.customId === "register_farm_modal"
           ) {
-            await i.deferUpdate();
+            // Note: deferUpdate was already called above
             registrationData.idMainTerhubung = i.fields.getTextInputValue(
               "farm_linked_main_id"
             );
@@ -413,7 +421,7 @@ module.exports = {
               await interaction.editReply({
                 content: `No valid screenshot uploaded within ${
                   MESSAGE_AWAIT_TIMEOUT / 60000
-                } minutes. Registration cancelled.`, // Timeout message
+                } minutes. Registration cancelled. Click /register to try again.`, // Timeout message + instruction
                 embeds: [],
                 components: [], // Remove buttons
               });
@@ -422,8 +430,7 @@ module.exports = {
             return; // End handling for this modal submit
           } // End of if (ModalSubmit)
 
-          // Defer update for other button/menu interactions ('i')
-          if (!i.deferred) await i.deferUpdate();
+          // Defer update was handled at the beginning of the try block
 
           // --- Handle Cancel Button (Matches original structure) ---
           if (i.customId === "register_cancel") {
@@ -540,6 +547,9 @@ module.exports = {
               embeds: [],
               components: nextComponents,
             });
+            console.log(
+              `[DEBUG] Original interaction edited for ${i.customId}.`
+            ); // Log edit success
           }
           // --- Handle Main Status Selection (Matches original structure) ---
           else if (i.customId === "register_select_main_status") {
@@ -621,7 +631,7 @@ module.exports = {
               await interaction.editReply({
                 content: `No valid screenshot uploaded within ${
                   MESSAGE_AWAIT_TIMEOUT / 60000
-                } minutes. Registration cancelled.`, // Timeout message
+                } minutes. Registration cancelled. Click /register to try again.`, // Timeout message + instruction
                 embeds: [],
                 components: [], // Remove buttons
               });
@@ -882,13 +892,28 @@ module.exports = {
           "error_editing_reply",
           "validation_error",
           "timeout",
-        ];
-        if (interaction.editable && !handledReasons.includes(reason)) {
-          let endContent = "Registration process ended unexpectedly."; // Default unexpected
-          if (reason === "time") {
-            // Original only handled time explicitly here
-            endContent = "Registration timed out."; // Original timeout text
-          }
+        ]; // Add timeout here as it's handled in catch
+
+        // --- MODIFIED: Explicitly handle timeout here to ensure message is sent ---
+        if (reason === "timeout" && interaction.editable) {
+          interaction
+            .editReply({
+              content: `Registration timed out after ${
+                MESSAGE_AWAIT_TIMEOUT / 60000
+              } minutes. Click /register to try again.`, // Consistent timeout message
+              embeds: [],
+              components: [], // Remove components
+            })
+            .catch((e) =>
+              console.error(
+                `[ERROR] ${new Date().toISOString()} - Failed to edit reply on collector end (reason: ${reason}):`,
+                e
+              )
+            );
+        } else if (interaction.editable && !handledReasons.includes(reason)) {
+          // Handle other unexpected end reasons
+          let endContent =
+            "Registration process ended unexpectedly. Please try /register again."; // Default unexpected
           interaction
             .editReply({
               content: endContent,
@@ -901,11 +926,6 @@ module.exports = {
                 e
               )
             );
-        } else if (reason === "timeout" && interaction.editable) {
-          // Message already sent in collect's awaitMessages catch block
-          console.log(
-            `[INFO] ${new Date().toISOString()} - Registration process timed out naturally for user ${userId} in channel ${channelId}.`
-          );
         } else if (reason === "invalid_file" && interaction.editable) {
           // Message already sent in collect's awaitMessages logic
           console.log(
