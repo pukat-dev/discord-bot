@@ -1,4 +1,4 @@
-// commands/register.js (Refactored - Added Back Button - English)
+// Import necessary modules from discord.js and node-fetch
 const {
   SlashCommandBuilder,
   EmbedBuilder,
@@ -7,833 +7,1010 @@ const {
   StringSelectMenuOptionBuilder,
   ButtonBuilder,
   ButtonStyle,
+  AttachmentBuilder, // Although not used directly here, might be useful later
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
   ComponentType,
   InteractionType,
-  MessageFlags,
 } = require("discord.js");
-const fetch = require("node-fetch");
+const fetch = require("node-fetch"); // Ensure node-fetch v2 is installed (npm install node-fetch@2)
 
-// --- Configuration ---
-const MESSAGE_AWAIT_TIMEOUT = 300000; // 5 minutes to wait for screenshot/modal
-const COLLECTOR_IDLE_TIMEOUT = 360000; // 6 minutes collector timeout
+// --- CHANNEL LOCK & TIMEOUT ---
+// Set to track channels with active registrations
+const activeRegistrationChannels = new Set();
+// Set global timeout (5 minutes in milliseconds)
+const MESSAGE_AWAIT_TIMEOUT = 300000; // 300,000 ms = 5 minutes
+const MODAL_AWAIT_TIMEOUT = 240000; // Timeout for modal submission (e.g., 4 minutes)
 
-// --- Helper Function ---
-/** Sends an ephemeral error message */
-async function sendEphemeralError(interaction, message) {
-  try {
-    if (!interaction || !interaction.reply || !interaction.followUp) return;
-    const options = {
-      content: `❌ Error: ${message}`,
-      flags: [MessageFlags.Ephemeral],
-    };
-    if (interaction.isRepliable()) {
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply(options);
-      } else {
-        await interaction.followUp(options);
-      }
-    } else {
-      console.warn(
-        `[WARN] Attempted to send ephemeral error to non-repliable interaction ${interaction.id}`
-      );
-    }
-  } catch (error) {
-    if (error.code !== 10062 && error.code !== 40060) {
-      // Ignore Unknown Interaction / Already Ack
-      console.error(
-        `[ERROR] Failed to send ephemeral error "${message}":`,
-        error
-      );
-    }
-  }
-}
-
-module.exports = {
-  data: new SlashCommandBuilder()
-    .setName("register")
-    .setDescription("Starts the interactive account registration process."),
-
-  /**
-   * Executes the registration command.
-   * @param {import('discord.js').ChatInputCommandInteraction} interaction - The command interaction.
-   * @param {string} appsScriptUrl - The Google Apps Script URL.
-   */
-  async execute(interaction, appsScriptUrl) {
-    const userId = interaction.user.id;
-    const username = interaction.user.username;
-    const channelId = interaction.channel.id;
-
-    console.log(
-      `[DEBUG] /register invoked by ${userId} (${username}) in channel ${channelId}`
-    );
-
-    // --- Initial Defer Reply ---
-    try {
-      await interaction.deferReply({ ephemeral: false });
-      console.log(`[DEBUG] Interaction ${interaction.id} publicly deferred.`);
-    } catch (deferError) {
-      console.error(
-        `[ERROR] Error deferring public reply for ${interaction.id}:`,
-        deferError
-      );
-      return;
-    }
-
-    // --- Local State ---
-    let registrationData = {
-      discordUserId: userId,
-      discordUsername: username,
-      attachment: null,
-      attachmentUrl: null,
-      tipeAkun: null,
-      statusMain: null,
-      isFiller: null,
-      idMainTerhubung: null,
-      step: "await_screenshot",
-    };
-
-    // --- Request Screenshot ---
-    const initialEmbed = new EmbedBuilder()
-      .setColor(0x0099ff)
-      .setTitle("📝 New Account Registration (Step 1)")
-      .setDescription(
-        `Hello ${username}!\n\nPlease **upload your Governor profile screenshot** in this channel.\n\n*(You have ${
-          MESSAGE_AWAIT_TIMEOUT / 60000
-        } minutes)*`
-      )
-      .setTimestamp();
-    // No Back button needed here, only Cancel
-    const cancelRowInitial = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`register_cancel_${userId}`)
-        .setLabel("Cancel")
-        .setStyle(ButtonStyle.Danger)
-    );
-
-    let promptMessage;
-    try {
-      promptMessage = await interaction.editReply({
-        embeds: [initialEmbed],
-        components: [cancelRowInitial],
-        fetchReply: true,
-      });
-      console.log(
-        `[DEBUG] Screenshot prompt sent for interaction ${interaction.id}. Message ID: ${promptMessage.id}`
-      );
-    } catch (editErr) {
-      console.error(
-        `[ERROR] Failed to send screenshot prompt for ${interaction.id}:`,
-        editErr
-      );
-      return;
-    }
-
-    // --- Wait for Screenshot Message ---
-    const messageFilter = (m) =>
-      m.author.id === userId &&
-      m.channel.id === channelId &&
-      m.attachments.size > 0 &&
-      m.attachments.first().contentType?.startsWith("image/");
-    let collectedMessage;
-    try {
-      console.log(`[DEBUG] Awaiting screenshot message from user ${userId}...`);
-      const collectedMessages = await interaction.channel.awaitMessages({
-        filter: messageFilter,
-        max: 1,
-        time: MESSAGE_AWAIT_TIMEOUT,
-        errors: ["time"],
-      });
-      collectedMessage = collectedMessages.first();
-      registrationData.attachment = collectedMessage.attachments.first();
-      registrationData.attachmentUrl = registrationData.attachment.url;
-      registrationData.step = "select_account_type";
-      console.log(
-        `[DEBUG] Screenshot received from user ${userId}: ${registrationData.attachmentUrl}`
-      );
-      await collectedMessage.react("👍").catch(console.error);
-    } catch (error) {
-      console.log(
-        `[WARN] Timed out waiting for screenshot from user ${userId}.`
-      );
-      await interaction
-        .editReply({
-          content: `⏰ Timed out waiting for screenshot. Registration cancelled.`,
-          embeds: [],
-          components: [],
-        })
-        .catch((e) =>
-          console.warn("Failed to edit reply on screenshot timeout:", e.message)
-        );
-      return;
-    }
-
-    // --- Ask Account Type ---
-    // Function to display this step (to be called when going back)
-    const displayAccountTypeStep = async (i) => {
-      registrationData.step = "select_account_type";
-      registrationData.tipeAkun = null; // Reset selection
-      const typeEmbed = new EmbedBuilder()
-        .setColor(0x0099ff)
-        .setTitle("📝 New Account Registration (Step 2)")
-        .setDescription(
-          "Screenshot received! 👍\n\nNow, please select the account type you want to register:"
-        )
-        .setThumbnail(registrationData.attachmentUrl)
-        .setTimestamp();
-      const accountTypeSelect = new StringSelectMenuBuilder()
-        .setCustomId(`register_type_${userId}`)
-        .setPlaceholder("Select account type...")
-        .addOptions(
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Main Account")
-            .setValue("main"),
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Farm Account")
-            .setValue("farm")
-        );
-      // Only Cancel button here, no "Back" from the first question after screenshot
-      const cancelRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`register_cancel_${userId}`)
-          .setLabel("Cancel")
-          .setStyle(ButtonStyle.Danger)
-      );
-      const rowTypeSelect = new ActionRowBuilder().addComponents(
-        accountTypeSelect
-      );
-
-      const interactionToEdit = i || interaction; // Use component interaction 'i' if available, otherwise the original command interaction
-
-      await interactionToEdit.editReply({
-        embeds: [typeEmbed],
-        components: [rowTypeSelect, cancelRow],
-        fetchReply: true, // Important to keep collector attached
-      });
-      console.log(
-        `[DEBUG] Displayed account type step via interaction ${interactionToEdit.id}.`
-      );
-    };
-
-    // Display the account type step initially
-    let currentPromptMessage = await interaction.editReply({
-      fetchReply: true,
-    }); // Re-fetch the message reference
-    await displayAccountTypeStep(interaction); // Use original interaction here
-    currentPromptMessage = await interaction.fetchReply(); // Fetch again after edit
-
-    // --- Collector for Subsequent Component Interactions (Buttons/Menus) ---
-    const collectorFilter = (i) =>
-      i.user.id === userId && i.message.id === currentPromptMessage.id;
-
-    // Create collector on the message reference we have
-    const collector = currentPromptMessage.createMessageComponentCollector({
-      filter: collectorFilter,
-      idle: COLLECTOR_IDLE_TIMEOUT,
-    });
-
-    console.log(
-      `[DEBUG] Component Collector created for message ${currentPromptMessage.id}, user ${userId}.`
-    );
-
-    collector.on("collect", async (i) => {
-      console.log(
-        `[DEBUG] Collector collected component interaction: ${i.customId} (interaction ID: ${i.id})`
-      );
-
-      try {
-        let isModalTrigger =
-          i.isStringSelectMenu() && i.customId === `register_filler_${userId}`;
-
-        // Defer ONLY if NOT a modal trigger
-        if (!isModalTrigger && !i.deferred && !i.replied) {
-          await i.deferUpdate();
-          console.log(
-            `[DEBUG] Component Interaction ${i.customId} (${i.id}) deferred.`
-          );
-        } else {
-          console.log(
-            `[DEBUG] Skipping defer for ${i.customId} (isModalTrigger: ${isModalTrigger}, deferred: ${i.deferred}, replied: ${i.replied})`
-          );
-        }
-
-        // --- Cancel Button ---
-        if (i.customId === `register_cancel_${userId}`) {
-          console.log(
-            `[DEBUG] Registration cancelled by user ${userId} via button.`
-          );
-          await i.editReply({
-            content: "❌ Registration cancelled.",
-            embeds: [],
-            components: [],
-          });
-          collector.stop("cancelled");
-          return;
-        }
-
-        // --- Back Button Handler (to Account Type) ---
-        if (i.customId === `register_back_to_type_${userId}`) {
-          console.log(`[DEBUG] User ${userId} clicked Back to Account Type.`);
-          await displayAccountTypeStep(i); // Call the function to display the step
-          return; // Let collector continue
-        }
-
-        // --- Back Button Handler (to Details Step) ---
-        if (i.customId === `register_back_to_details_${userId}`) {
-          console.log(`[DEBUG] User ${userId} clicked Back from Confirmation.`);
-          // Determine the previous step based on account type
-          if (registrationData.tipeAkun === "main") {
-            // Go back to main status selection
-            registrationData.step = "select_main_status";
-            registrationData.statusMain = null; // Reset status
-            await displayMainStatusStep(i, registrationData); // Call function to display this step
-          } else {
-            // Go back to filler status selection
-            registrationData.step = "select_filler_status";
-            registrationData.isFiller = null; // Reset filler status
-            registrationData.idMainTerhubung = null; // Reset linked ID
-            await displayFillerStatusStep(i, registrationData); // Call function to display this step
-          }
-          return; // Let collector continue
-        }
-
-        // --- Account Type Selection ---
-        if (
-          i.customId === `register_type_${userId}` &&
-          registrationData.step === "select_account_type"
-        ) {
-          registrationData.tipeAkun = i.values[0];
-          console.log(
-            `[DEBUG] User ${userId} selected account type: ${registrationData.tipeAkun}`
-          );
-
-          if (registrationData.tipeAkun === "main") {
-            await displayMainStatusStep(i, registrationData);
-          } else {
-            // Farm
-            await displayFillerStatusStep(i, registrationData);
-          }
-        }
-
-        // --- Main Status Selection ---
-        else if (
-          i.customId === `register_status_${userId}` &&
-          registrationData.step === "select_main_status"
-        ) {
-          registrationData.statusMain = i.values[0];
-          registrationData.step = "confirm_submission";
-          console.log(
-            `[DEBUG] User ${userId} selected main status: ${registrationData.statusMain}`
-          );
-          await showConfirmation(i, registrationData);
-        }
-
-        // --- Farm Filler Status Selection ---
-        else if (
-          i.customId === `register_filler_${userId}` &&
-          registrationData.step === "select_filler_status"
-        ) {
-          // Interaction 'i' (SelectMenu) was NOT deferred
-          registrationData.isFiller = i.values[0] === "true";
-          registrationData.step = "await_modal_farm";
-          console.log(
-            `[DEBUG] User ${userId} selected filler status: ${registrationData.isFiller}`
-          );
-
-          const modal = new ModalBuilder()
-            .setCustomId(`register_farm_modal_${userId}`)
-            .setTitle("Enter Main Account ID");
-          const mainIdInput = new TextInputBuilder()
-            .setCustomId("farm_linked_main_id")
-            .setLabel("Linked Main Account Governor ID")
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder("Example: 12345678")
-            .setRequired(true)
-            .setMinLength(7)
-            .setMaxLength(10);
-          modal.addComponents(
-            new ActionRowBuilder().addComponents(mainIdInput)
-          );
-
-          await i.showModal(modal);
-          console.log(
-            `[DEBUG] Modal shown for farm ID input (interaction: ${i.id}). Awaiting submission...`
-          );
-
-          // --- Use awaitModalSubmit ---
-          try {
-            const modalSubmitInteraction = await i.awaitModalSubmit({
-              filter: (modalInt) =>
-                modalInt.customId === `register_farm_modal_${userId}` &&
-                modalInt.user.id === userId,
-              time: MESSAGE_AWAIT_TIMEOUT,
-            });
-            console.log(
-              `[DEBUG] Modal submitted (interaction ID: ${modalSubmitInteraction.id})`
-            );
-
-            // Defer the modal submit interaction BEFORE processing
-            await modalSubmitInteraction.deferUpdate();
-            console.log(
-              `[DEBUG] Modal Submit Interaction ${modalSubmitInteraction.id} deferred.`
-            );
-
-            const linkedId = modalSubmitInteraction.fields.getTextInputValue(
-              "farm_linked_main_id"
-            );
-            if (!/^\d+$/.test(linkedId)) {
-              await sendEphemeralError(
-                modalSubmitInteraction,
-                "Invalid Governor ID format. Please enter numbers only."
-              );
-              collector.stop("invalid_modal_input");
-              await interaction
-                .editReply({
-                  content: "❌ Invalid ID format. Registration cancelled.",
-                  embeds: [],
-                  components: [],
-                })
-                .catch(() => {});
-              return;
-            }
-            registrationData.idMainTerhubung = linkedId;
-            registrationData.step = "confirm_submission";
-            console.log(
-              `[DEBUG] User ${userId} submitted main ID via modal: ${registrationData.idMainTerhubung}`
-            );
-
-            await showConfirmation(modalSubmitInteraction, registrationData);
-          } catch (modalError) {
-            console.log(
-              `[WARN] Modal submission timed out or failed for interaction ${i.id}:`,
-              modalError instanceof Error ? modalError.message : modalError
-            );
-            collector.stop("modal_timeout");
-            await interaction
-              .editReply({
-                content: `⏰ Modal submission timed out. Registration cancelled.`,
-                embeds: [],
-                components: [],
-              })
-              .catch((e) =>
-                console.warn(
-                  "Failed to edit reply on modal timeout:",
-                  e.message
-                )
-              );
-          }
-        }
-
-        // --- Confirmation Submit Button ---
-        else if (
-          i.customId === `register_confirm_${userId}` &&
-          registrationData.step === "confirm_submission"
-        ) {
-          console.log(`[DEBUG] User ${userId} confirmed submission.`);
-          await processRegistration(i, registrationData, appsScriptUrl);
-          collector.stop("processed");
-        }
-
-        // --- Handle unexpected interactions or wrong step ---
-        else {
-          console.warn(
-            `[WARN] Collector received unexpected interaction: ${i.customId} or wrong step: ${registrationData.step}`
-          );
-          await sendEphemeralError(
-            i,
-            "Unexpected action or out of sequence. Please follow the prompts."
-          );
-        }
-      } catch (collectError) {
-        console.error(
-          `[ERROR] Error handling collected interaction ${i?.customId} (${i?.id}):`,
-          collectError
-        );
-        if (collectError.code !== 10062) {
-          await sendEphemeralError(
-            i || interaction,
-            "An error occurred while processing your action."
-          );
-        }
-      }
-    }); // End collector.on('collect')
-
-    // --- Collector End Logic ---
-    collector.on("end", (collected, reason) => {
-      console.log(
-        `[DEBUG] Registration collector ended for message ${currentPromptMessage?.id}. Reason: ${reason}. Items collected: ${collected.size}`
-      );
-      const handledEndReasons = [
-        "processed",
-        "cancelled",
-        "invalid_modal_input",
-        "modal_timeout",
-      ];
-      if (!handledEndReasons.includes(reason) && currentPromptMessage) {
-        console.log(
-          `[DEBUG] Collector ended with reason '${reason}', attempting to clear components.`
-        );
-        interaction.editReply({ components: [] }).catch((e) => {
-          if (e.code !== 10008 && e.code !== 10062) {
-            console.warn(
-              `[WARN] Failed to clear components on collector end (reason: ${reason}):`,
-              e.code
-            );
-          }
-        });
-      }
-    }); // End collector.on('end')
-  }, // End execute function
-}; // End module.exports
-
-/** Displays the Main account status selection step */
-async function displayMainStatusStep(i, data) {
-  data.step = "select_main_status";
-  const embedDesc =
-    "Account Type: **Main**.\n\nNow, please select your Main account status:";
-  const statusSelect = new StringSelectMenuBuilder()
-    .setCustomId(`register_status_${data.discordUserId}`)
-    .setPlaceholder("Select status...")
-    .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel("DKP 2921 Old Player")
-        .setValue("Old Player"),
-      new StringSelectMenuOptionBuilder()
-        .setLabel("DKP Migrants")
-        .setValue("Migrants")
-    );
-  const selectRow = new ActionRowBuilder().addComponents(statusSelect);
-  // Add Back button to go to Account Type selection
-  const backButton = new ButtonBuilder()
-    .setCustomId(`register_back_to_type_${data.discordUserId}`)
-    .setLabel("Back")
-    .setStyle(ButtonStyle.Secondary);
-  const cancelButton = new ButtonBuilder()
-    .setCustomId(`register_cancel_${data.discordUserId}`)
-    .setLabel("Cancel")
-    .setStyle(ButtonStyle.Danger);
-  const buttonRow = new ActionRowBuilder().addComponents(
-    backButton,
-    cancelButton
-  );
-
-  const embed = new EmbedBuilder()
-    .setColor(0x0099ff)
-    .setTitle("📝 New Account Registration (Step 3)")
-    .setDescription(embedDesc)
-    .setThumbnail(data.attachmentUrl)
-    .setTimestamp();
-
-  await i.editReply({ embeds: [embed], components: [selectRow, buttonRow] });
-  console.log(`[DEBUG] Displayed main status step via interaction ${i.id}.`);
-}
-
-/** Displays the Farm filler status selection step */
-async function displayFillerStatusStep(i, data) {
-  data.step = "select_filler_status";
-  const embedDesc =
-    "Account Type: **Farm**.\n\nIs this Farm account a Filler account?";
-  const fillerSelect = new StringSelectMenuBuilder()
-    .setCustomId(`register_filler_${data.discordUserId}`)
-    .setPlaceholder("Is this a filler account?")
-    .addOptions(
-      new StringSelectMenuOptionBuilder().setLabel("Yes").setValue("true"),
-      new StringSelectMenuOptionBuilder().setLabel("No").setValue("false")
-    );
-  const selectRow = new ActionRowBuilder().addComponents(fillerSelect);
-  // Add Back button to go to Account Type selection
-  const backButton = new ButtonBuilder()
-    .setCustomId(`register_back_to_type_${data.discordUserId}`)
-    .setLabel("Back")
-    .setStyle(ButtonStyle.Secondary);
-  const cancelButton = new ButtonBuilder()
-    .setCustomId(`register_cancel_${data.discordUserId}`)
-    .setLabel("Cancel")
-    .setStyle(ButtonStyle.Danger);
-  const buttonRow = new ActionRowBuilder().addComponents(
-    backButton,
-    cancelButton
-  );
-
-  const embed = new EmbedBuilder()
-    .setColor(0x0099ff)
-    .setTitle("📝 New Account Registration (Step 3)")
-    .setDescription(embedDesc)
-    .setThumbnail(data.attachmentUrl)
-    .setTimestamp();
-
-  await i.editReply({ embeds: [embed], components: [selectRow, buttonRow] });
-  console.log(`[DEBUG] Displayed filler status step via interaction ${i.id}.`);
-}
-
-/** Displays the confirmation screen */
-async function showConfirmation(i, data) {
-  console.log(
-    `[DEBUG] Showing confirmation screen via interaction ${
-      i.id
-    }. Data: ${JSON.stringify(data)}`
-  );
+/**
+ * Displays the registration data confirmation embed to the user.
+ * (Matches original structure, translated)
+ * @param {import('discord.js').ChatInputCommandInteraction} originalInteraction - The original command interaction to edit.
+ * @param {object} data - The object containing collected registration data.
+ * @param {boolean} [farmNeedsModalId=false] - Original flag, kept for consistency.
+ */
+async function showConfirmationPublic(
+  originalInteraction,
+  data,
+  farmNeedsModalId = false
+) {
+  // Create the confirmation embed
   const confirmEmbed = new EmbedBuilder()
-    .setColor(0xffff00) // Yellow
-    .setTitle("🔍 Confirm Registration Details")
-    .setDescription("Please review the details below before submitting:")
-    .setThumbnail(data.attachmentUrl)
+    .setColor(0xffff00) // Yellow color
+    .setTitle("🔍 Confirm Registration Details") // Original title
     .addFields({
-      name: "Account Type",
-      value: data.tipeAkun === "main" ? "Main" : "Farm",
+      name: "Account Type", // Original field name
+      value: data.tipeAkun
+        ? data.tipeAkun === "main"
+          ? "Main"
+          : "Farm"
+        : "N/A", // Translate value
       inline: true,
-    });
+    })
+    .setTimestamp();
 
+  // Add specific fields based on account type (matches original structure)
   if (data.tipeAkun === "main") {
     confirmEmbed.addFields({
-      name: "Status",
+      name: "Status", // Original field name
       value: data.statusMain || "N/A",
       inline: true,
     });
   } else {
-    // Farm
-    confirmEmbed.addFields(
-      {
-        name: "Is Filler?",
-        value: data.isFiller ? "Yes" : "No",
-        inline: true,
-      },
-      {
+    // If account type is 'farm'
+    confirmEmbed.addFields({
+      name: "Is Filler?", // Original field name
+      value: data.isFiller === null ? "N/A" : data.isFiller ? "Yes" : "No", // Handle null case
+      inline: true,
+    });
+    // Display the linked Main ID (matches original logic)
+    if (farmNeedsModalId) {
+      // This flag might not be relevant anymore if modal always follows filler selection
+      confirmEmbed.addFields({
         name: "Linked Main ID",
+        value: "(Will be collected via modal)", // Original text
+        inline: true,
+      });
+    } else {
+      confirmEmbed.addFields({
+        name: "Linked Main ID", // Original field name
         value: data.idMainTerhubung || "N/A",
         inline: true,
-      }
-    );
+      });
+    }
   }
-  confirmEmbed.addFields({
-    name: "Screenshot",
-    value: `[View Attachment](${data.attachmentUrl})`,
-  });
-  confirmEmbed.setTimestamp();
-  confirmEmbed.setFooter({ text: `Requested by: ${data.discordUsername}` });
 
+  // Add screenshot information if available (matches original structure)
+  if (data.attachment) {
+    confirmEmbed.addFields({
+      name: "Screenshot", // Original field name
+      value: `[View Attachment](${data.attachment.url})`, // Original text
+    });
+    confirmEmbed.setThumbnail(data.attachment.url);
+  } else {
+    confirmEmbed.addFields({
+      name: "Screenshot",
+      value: "Not provided yet.", // Original text
+    });
+  }
+
+  // Create confirmation buttons (matches original structure)
   const submitButton = new ButtonBuilder()
-    .setCustomId(`register_confirm_${data.discordUserId}`)
-    .setLabel("Submit Registration")
+    .setCustomId("register_confirm_submit")
+    .setLabel("Submit Registration") // Original label
     .setStyle(ButtonStyle.Success);
-  // --- Add Back Button Here ---
   const backButton = new ButtonBuilder()
-    .setCustomId(`register_back_to_details_${data.discordUserId}`) // New ID for back from confirm
-    .setLabel("Back")
+    .setCustomId("register_confirm_back")
+    .setLabel("Start Over") // Original label
     .setStyle(ButtonStyle.Secondary);
   const cancelButton = new ButtonBuilder()
-    .setCustomId(`register_cancel_${data.discordUserId}`)
-    .setLabel("Cancel")
+    .setCustomId("register_cancel")
+    .setLabel("Cancel") // Original label
     .setStyle(ButtonStyle.Danger);
 
-  // Add Back button to the row
+  // Create an action row for the buttons
   const confirmRow = new ActionRowBuilder().addComponents(
     submitButton,
     backButton,
     cancelButton
   );
 
+  // Send or edit the message with the confirmation embed and buttons
   try {
-    if (i.isRepliable()) {
-      await i.editReply({
-        content: null,
-        embeds: [confirmEmbed],
-        components: [confirmRow], // Use the row with the Back button
-      });
-      console.log(
-        `[DEBUG] Confirmation message shown/updated via interaction ${i.id}.`
-      );
-    } else {
+    // Use editReply on the original interaction
+    if (!originalInteraction.editable) {
       console.warn(
-        `[WARN] Attempted to edit non-repliable interaction ${i.id} for confirmation.`
+        `[WARN] ${new Date().toISOString()} - Original interaction is no longer editable for confirmation.`
       );
+      return; // Cannot edit the main message
     }
+    await originalInteraction.editReply({
+      content: "Please review your registration details below and confirm:", // Original text
+      embeds: [confirmEmbed],
+      components: [confirmRow], // Add the buttons
+    });
+    console.log(
+      `[DEBUG] ${new Date().toISOString()} - Public confirmation message shown in channel ${
+        originalInteraction.channel.id
+      }.`
+    );
   } catch (editError) {
     console.error(
-      `[ERROR] Failed to show/update confirmation message via interaction ${i.id}:`,
+      `[ERROR] ${new Date().toISOString()} - Failed to show public confirmation in channel ${
+        originalInteraction.channel.id
+      }:`,
       editError
     );
-    await sendEphemeralError(i, "Failed to display confirmation screen.");
+    // Simple text error handling, matching original style but removing components
+    if (originalInteraction.editable) {
+      await originalInteraction
+        .editReply({
+          content: "Error displaying confirmation. Please try again.", // Original error text
+          embeds: [],
+          components: [], // Remove buttons on error
+        })
+        .catch((e) =>
+          console.error("Error sending confirmation error message:", e)
+        );
+    }
   }
 }
 
-/** Processes the data submission to Google Apps Script */
-async function processRegistration(i, data, appsScriptUrl) {
-  // ... (fungsi processRegistration sama seperti sebelumnya) ...
-  try {
-    if (i.isRepliable()) {
-      await i.editReply({
-        content: "⏳ Processing your registration... Please wait.",
-        embeds: [],
-        components: [],
-      });
-    } else {
-      console.warn(
-        `[WARN] Could not edit message to processing for user ${data.discordUserId} via interaction ${i.id} (not repliable).`
-      );
-    }
-  } catch (e) {
-    console.warn(
-      `[WARN] Could not edit message to processing for user ${data.discordUserId}:`,
-      e.message
-    );
-  }
+// Export the command module
+module.exports = {
+  // Slash Command definition (matches original structure)
+  data: new SlashCommandBuilder().setName("register").setDescription(
+    "Press Enter or Send to start the interactive registration." // Original description
+  ),
 
-  let result = {
-    status: "error",
-    message: "Failed to contact the registration server.",
-  };
-  try {
-    const imageResponse = await fetch(data.attachmentUrl);
-    if (!imageResponse.ok)
-      throw new Error(`Failed to fetch image: ${imageResponse.statusText}`);
-    const imageBuffer = await imageResponse.buffer();
-    const imageBase64 = imageBuffer.toString("base64");
-    console.log(
-      `[DEBUG] Image converted to base64 for submission. User: ${data.discordUserId}`
-    );
-
-    const payloadData = { ...data };
-    delete payloadData.attachment;
-    delete payloadData.step;
-    payloadData.imageBase64 = imageBase64;
-
-    Object.keys(payloadData).forEach(
-      (key) => payloadData[key] == null && delete payloadData[key]
-    );
-
-    const gasPayload = { command: "register", data: payloadData };
+  /**
+   * The main function executed when the /register command is run.
+   * @param {import('discord.js').ChatInputCommandInteraction} interaction - The command interaction.
+   * @param {string} appsScriptUrl - Your Google Apps Script Web App URL.
+   */
+  async execute(interaction, appsScriptUrl) {
+    // 'interaction' here is the original ChatInputCommandInteraction
+    const channelId = interaction.channel.id;
+    const userId = interaction.user.id;
+    const username = interaction.user.username;
 
     console.log(
-      `[DEBUG] Sending payload to GAS for user ${data.discordUserId}. Base64 size: ${imageBase64.length}`
+      `[DEBUG] ${new Date().toISOString()} - /register invoked by ${userId} (${username}) in channel ${channelId}`
     );
-    const gasResponse = await fetch(appsScriptUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(gasPayload),
-    });
 
-    if (!gasResponse.ok) {
-      const errorText = await gasResponse.text();
-      throw new Error(`GAS Error (${gasResponse.status}): ${errorText}`);
-    }
-    result = await gasResponse.json();
-    console.log(
-      `[DEBUG] GAS Response for user ${data.discordUserId}: ${JSON.stringify(
-        result
-      )}`
-    );
-  } catch (processError) {
-    console.error(
-      `[ERROR] Error processing registration for user ${data.discordUserId}:`,
-      processError
-    );
-    result = {
-      status: "error",
-      message: `An internal error occurred: ${processError.message}`,
-    };
-  }
-
-  // --- Display Final Result ---
-  try {
-    const finalEmbed = new EmbedBuilder();
-    if (result.status === "success") {
-      finalEmbed.setColor(0x00ff00).setTitle("✅ Registration Successful!");
-      finalEmbed
-        .setDescription(
-          result.message || "Your account has been successfully registered."
-        )
-        .setThumbnail(data.attachmentUrl);
-      if (result.details) {
-        if (result.details.govId)
-          finalEmbed.addFields({
-            name: "Governor ID",
-            value: result.details.govId.toString(),
-            inline: true,
-          });
-        if (result.details.type)
-          finalEmbed.addFields({
-            name: "Account Type",
-            value: result.details.type,
-            inline: true,
-          });
-        if (result.details.status)
-          finalEmbed.addFields({
-            name: "Status",
-            value: result.details.status,
-            inline: true,
-          });
-        if (result.details.isFiller !== undefined)
-          finalEmbed.addFields({
-            name: "Is Filler?",
-            value: result.details.isFiller ? "Yes" : "No",
-            inline: true,
-          });
-        if (result.details.linkedMainId)
-          finalEmbed.addFields({
-            name: "Linked Main ID",
-            value: result.details.linkedMainId.toString(),
-            inline: true,
-          });
-        if (result.details.targetKP)
-          finalEmbed.addFields({
-            name: "Target KP",
-            value: result.details.targetKP.toLocaleString(),
-            inline: true,
-          });
-        if (result.details.targetDeath)
-          finalEmbed.addFields({
-            name: "Target Deaths",
-            value: result.details.targetDeath.toLocaleString(),
-            inline: true,
-          });
-      }
-      finalEmbed
-        .setTimestamp()
-        .setFooter({ text: `User: ${data.discordUsername}` });
-
-      if (i.isRepliable()) {
-        await i.editReply({
-          content: null,
-          embeds: [finalEmbed],
-          components: [],
-        });
-      } else {
-        console.warn(
-          `[WARN] Cannot edit final success reply for interaction ${i.id} (not repliable).`
-        );
-      }
-    } else {
-      finalEmbed.setColor(0xff0000).setTitle("❌ Registration Failed");
-      finalEmbed
-        .setDescription(result.message || "An unknown error occurred.")
-        .setTimestamp();
-      if (i.isRepliable()) {
-        await i.editReply({
-          content: null,
-          embeds: [finalEmbed],
-          components: [],
-        });
-      } else {
-        console.warn(
-          `[WARN] Cannot edit final fail reply for interaction ${i.id} (not repliable).`
-        );
-      }
-    }
-  } catch (finalEditError) {
-    console.error(
-      `[ERROR] Failed to edit final reply for user ${data.discordUserId}:`,
-      finalEditError
-    );
-    await i
-      .followUp({
-        content: `Registration Result: ${
-          result.message || "Finished with unknown status."
-        }`,
+    // --- CHANNEL LOCK CHECK ---
+    if (activeRegistrationChannels.has(channelId)) {
+      await interaction.reply({
+        content:
+          "⚠️ Sorry, another registration process is already active in this channel. Please wait until it's completed or cancelled.", // Lock message in English
         ephemeral: true,
-      })
-      .catch(() => {});
-  }
-}
+      });
+      console.log(
+        `[WARN] ${new Date().toISOString()} - /register blocked in channel ${channelId} due to active registration.`
+      );
+      return; // Stop execution if channel is locked
+    }
+    // --- END CHANNEL LOCK CHECK ---
+
+    // If not locked, add the channel to the Set (lock the channel)
+    activeRegistrationChannels.add(channelId);
+    console.log(
+      `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} locked for registration.`
+    );
+
+    // Use try...finally to ensure the lock is always released
+    try {
+      // --- START MAIN LOGIC ---
+
+      // Defer reply (PUBLIC) to allow time for subsequent processing
+      try {
+        await interaction.deferReply({ ephemeral: false }); // Public
+        console.log(
+          `[DEBUG] ${new Date().toISOString()} - Interaction publicly deferred in channel ${channelId}.`
+        );
+      } catch (deferError) {
+        console.error(
+          `[ERROR] ${new Date().toISOString()} - Error deferring public reply in channel ${channelId}:`,
+          deferError
+        );
+        // Simple text error reply if possible
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction
+            .reply({
+              content:
+                "❌ Failed to start the registration process due to an internal error.", // Simple error text
+              ephemeral: true,
+            })
+            .catch((e) =>
+              console.error("Error sending initial defer error reply:", e)
+            );
+        }
+        return; // Stop execution (finally will still run)
+      }
+
+      // --- STEP 1: ACCOUNT TYPE SELECTION (Matches original structure) ---
+      const initialEmbed = new EmbedBuilder()
+        .setColor(0x0099ff)
+        .setTitle("📝 New Account Registration") // Original title
+        .setDescription(
+          "Please select the type of account you want to register:" // Original description
+        )
+        .setTimestamp();
+
+      const accountTypeSelect = new StringSelectMenuBuilder()
+        .setCustomId("register_select_account_type")
+        .setPlaceholder("Select account type...") // Original placeholder
+        .addOptions(
+          new StringSelectMenuOptionBuilder()
+            .setLabel("Main Account") // Original label
+            .setDescription("Register your primary account.") // Original description
+            .setValue("main"),
+          new StringSelectMenuOptionBuilder()
+            .setLabel("Farm Account") // Original label
+            .setDescription("Register a farm account.") // Original description
+            .setValue("farm")
+        );
+
+      const cancelButtonInitial = new ButtonBuilder()
+        .setCustomId("register_cancel")
+        .setLabel("Cancel") // Original label
+        .setStyle(ButtonStyle.Danger);
+
+      const selectRow = new ActionRowBuilder().addComponents(accountTypeSelect);
+      const buttonRowInitial = new ActionRowBuilder().addComponents(
+        cancelButtonInitial
+      );
+
+      // Send the initial message
+      let initialReply;
+      try {
+        initialReply = await interaction.editReply({
+          embeds: [initialEmbed],
+          components: [selectRow, buttonRowInitial], // Show menu and cancel button
+          fetchReply: true,
+        });
+        console.log(
+          `[DEBUG] ${new Date().toISOString()} - Initial public registration message sent in channel ${channelId}.`
+        );
+      } catch (editErr) {
+        console.error(
+          `[ERROR] ${new Date().toISOString()} - Failed to send initial registration message in channel ${channelId}:`,
+          editErr
+        );
+        if (interaction.editable) {
+          await interaction
+            .editReply({
+              content:
+                "An error occurred setting up registration. Please try again.", // Original error text
+              embeds: [],
+              components: [],
+            })
+            .catch((e) =>
+              console.error("Error sending initial setup error message:", e)
+            );
+        }
+        return; // Stop execution (finally will still run)
+      }
+
+      // Interaction filter: only from the user who initiated the command
+      const filter = (i) => i.user.id === userId;
+
+      // Create a collector for message components (menu, buttons)
+      // This collector will primarily handle button clicks and initial menu selections
+      const collector = initialReply.createMessageComponentCollector({
+        filter,
+        // Set a longer time for the overall process, but individual steps have shorter waits
+        time: MESSAGE_AWAIT_TIMEOUT * 2, // e.g., 10 minutes total for the collector
+      });
+
+      // Object to store temporary registration data (matches original structure)
+      let registrationData = {
+        discordUserId: userId,
+        discordUsername: username,
+        tipeAkun: null,
+        statusMain: null,
+        isFiller: null,
+        idMainTerhubung: null,
+        imageBase64: null,
+        attachment: null,
+      };
+
+      // --- COLLECTOR LOGIC ---
+      collector.on("collect", async (i) => {
+        // 'i' is the component/modal interaction
+        console.log(
+          `[DEBUG] ${new Date().toISOString()} - Interaction collected: ${
+            i.customId
+          } from user ${i.user.id} in channel ${channelId}`
+        );
+
+        try {
+          // --- Handle Modal Submit (Farm ID) ---
+          // This is now handled by awaitModalSubmit below, so this block can be removed or commented out
+          /*
+                      if (
+                          i.type === InteractionType.ModalSubmit &&
+                          i.customId === "register_farm_modal"
+                      ) {
+                         // ... logic moved ...
+                      }
+                      */
+
+          // --- Defer non-modal/non-showModal interactions ---
+          if (
+            i.type !== InteractionType.ModalSubmit &&
+            i.customId !== "register_select_farm_filler"
+          ) {
+            if (!i.deferred) await i.deferUpdate();
+            console.log(`[DEBUG] Interaction ${i.customId} deferred.`);
+          }
+
+          // --- Handle Cancel Button (Matches original structure) ---
+          if (i.customId === "register_cancel") {
+            console.log(
+              `[DEBUG] ${new Date().toISOString()} - Registration cancelled by user ${userId} in channel ${channelId}.`
+            );
+            await interaction.editReply({
+              // Edit original interaction
+              content: "Registration cancelled.", // Original text
+              embeds: [],
+              components: [], // Remove all components
+            });
+            collector.stop("cancelled"); // Stop the collector
+            return;
+          }
+
+          // --- Handle Back Button (Matches original structure) ---
+          if (
+            i.customId === "register_confirm_back" ||
+            i.customId === "register_back_to_type"
+          ) {
+            console.log(
+              `[DEBUG] ${new Date().toISOString()} - User ${userId} clicked Back in channel ${channelId}. Resetting to start.`
+            );
+            // Reset registration data
+            registrationData = {
+              discordUserId: userId,
+              discordUsername: username,
+              tipeAkun: null,
+              statusMain: null,
+              isFiller: null,
+              idMainTerhubung: null,
+              imageBase64: null,
+              attachment: null,
+            };
+            // Show the initial account type selection message again
+            await interaction.editReply({
+              // Edit original interaction
+              content: null,
+              embeds: [initialEmbed],
+              components: [selectRow, buttonRowInitial], // Show initial components
+            });
+            return; // Let collector continue
+          }
+
+          // --- Handle Account Type Selection (Matches original structure) ---
+          if (i.customId === "register_select_account_type") {
+            registrationData.tipeAkun = i.values[0];
+            console.log(
+              `[DEBUG] ${new Date().toISOString()} - Account type selected: ${
+                registrationData.tipeAkun
+              } by user ${userId} in channel ${channelId}`
+            );
+
+            // Prepare Back and Cancel buttons
+            const backButtonComp = new ButtonBuilder()
+              .setCustomId("register_back_to_type")
+              .setLabel("Back") // Original label
+              .setStyle(ButtonStyle.Secondary);
+            const cancelButtonComp = new ButtonBuilder()
+              .setCustomId("register_cancel")
+              .setLabel("Cancel") // Original label
+              .setStyle(ButtonStyle.Danger);
+            const buttonRowType = new ActionRowBuilder().addComponents(
+              backButtonComp,
+              cancelButtonComp
+            );
+
+            let nextContent = "";
+            let nextComponents = [];
+
+            if (registrationData.tipeAkun === "main") {
+              // --- STEP 2a: MAIN ACCOUNT STATUS SELECTION (Matches original structure) ---
+              const statusSelect = new StringSelectMenuBuilder()
+                .setCustomId("register_select_main_status")
+                .setPlaceholder("Select main account status...") // Original placeholder
+                .addOptions(
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel("DKP 2921 Old Player") // Original label
+                    .setValue("Old Player"),
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel("DKP Migrants") // Original label
+                    .setValue("Migrants")
+                );
+              const statusRow = new ActionRowBuilder().addComponents(
+                statusSelect
+              );
+              nextContent = `You selected: **Main Account**. Please select your status:`; // Original text
+              nextComponents = [statusRow, buttonRowType]; // Show status menu + back/cancel buttons
+            } else if (registrationData.tipeAkun === "farm") {
+              // --- STEP 2b: FARM FILLER SELECTION (Using Dropdown like original) ---
+              const fillerSelect = new StringSelectMenuBuilder() // Use Select Menu
+                .setCustomId("register_select_farm_filler") // New Custom ID for the menu
+                .setPlaceholder("Is this account a Filler account?") // Placeholder
+                .addOptions(
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel("Yes, it IS a Filler") // Option Label
+                    .setValue("yes"), // Simple value
+                  new StringSelectMenuOptionBuilder()
+                    .setLabel("No, it is NOT a Filler") // Option Label
+                    .setValue("no") // Simple value
+                );
+              const fillerRow = new ActionRowBuilder().addComponents(
+                fillerSelect
+              ); // Row for the select menu
+              nextContent = `You selected: **Farm Account**. Is this account a Filler account?`; // Original text
+              nextComponents = [fillerRow, buttonRowType]; // Display select menu + back/cancel buttons
+            }
+
+            // Update the message with the next step
+            await interaction.editReply({
+              // Edit original interaction
+              content: nextContent,
+              embeds: [],
+              components: nextComponents,
+            });
+            // No deferUpdate needed here as editReply acknowledges 'i'
+            console.log(
+              `[DEBUG] Original interaction edited for ${i.customId}.`
+            );
+          }
+          // --- Handle Main Status Selection (Matches original structure) ---
+          else if (i.customId === "register_select_main_status") {
+            registrationData.statusMain = i.values[0];
+            console.log(
+              `[DEBUG] ${new Date().toISOString()} - Main status selected: ${
+                registrationData.statusMain
+              } by user ${userId} in channel ${channelId}`
+            );
+
+            // Request screenshot upload
+            try {
+              await interaction.editReply({
+                // Edit original interaction
+                content: `Status selected: **${
+                  registrationData.statusMain
+                }**. Please upload a screenshot of your Governor Profile now. (You have ${
+                  MESSAGE_AWAIT_TIMEOUT / 60000
+                } minutes)`, // Text + timeout info
+                embeds: [],
+                components: [], // Remove previous components
+              });
+            } catch (editErr) {
+              console.error(
+                `[ERROR] ${new Date().toISOString()} - Failed to edit reply before awaiting main screenshot in channel ${channelId}:`,
+                editErr
+              );
+              if (interaction.editable) {
+                await interaction
+                  .editReply({
+                    content:
+                      "An error occurred preparing the next step. Please try again.",
+                    embeds: [],
+                    components: [],
+                  })
+                  .catch((e) => console.error(e));
+              }
+              collector.stop("error_editing_reply"); // Stop collector if edit fails
+              return; // Exit collect handler
+            }
+
+            // Wait for message with image attachment
+            const messageFilter = (m) =>
+              m.author.id === userId && m.attachments.size > 0;
+            try {
+              const collectedMessages = await interaction.channel.awaitMessages(
+                {
+                  filter: messageFilter,
+                  max: 1,
+                  time: MESSAGE_AWAIT_TIMEOUT,
+                  errors: ["time"],
+                }
+              );
+              const userMessage = collectedMessages.first();
+              const attachment = userMessage.attachments.first();
+
+              if (attachment && attachment.contentType?.startsWith("image/")) {
+                registrationData.attachment = attachment;
+                console.log(
+                  `[DEBUG] ${new Date().toISOString()} - Main screenshot received: ${
+                    attachment.url
+                  } in channel ${channelId}`
+                );
+                // Show confirmation
+                await showConfirmationPublic(interaction, registrationData); // Use original interaction
+              } else {
+                await interaction.editReply({
+                  content:
+                    "Invalid file type. Please upload an image. Registration cancelled.", // Original error text
+                  embeds: [],
+                  components: [], // Remove buttons
+                });
+                collector.stop("invalid_file");
+              }
+            } catch (msgError) {
+              console.log(
+                `[WARN] ${new Date().toISOString()} - Timed out waiting for main screenshot in channel ${channelId}.`
+              );
+              await interaction.editReply({
+                content: `No valid screenshot uploaded within ${
+                  MESSAGE_AWAIT_TIMEOUT / 60000
+                } minutes. Registration cancelled. Click /register to try again.`, // Timeout message + instruction
+                embeds: [],
+                components: [], // Remove buttons
+              });
+              collector.stop("timeout");
+            }
+          }
+          // --- Handle Farm Filler Selection (Using Dropdown) ---
+          else if (i.customId === "register_select_farm_filler") {
+            // NOTE: deferUpdate was SKIPPED for this interaction 'i' earlier
+
+            const selectedValue = i.values[0]; // Get the selected value ("yes" or "no")
+            registrationData.isFiller = selectedValue === "yes"; // Set boolean based on value
+            console.log(
+              `[DEBUG] ${new Date().toISOString()} - Filler status selected: ${
+                registrationData.isFiller
+              } by user ${userId} in channel ${channelId}`
+            );
+
+            // --- MODIFIED: Show Modal and Await Submission ---
+            const modal = new ModalBuilder()
+              .setCustomId("register_farm_modal") // Keep the same modal ID
+              .setTitle("Farm Account Details"); // Original title
+
+            const mainIdInput = new TextInputBuilder()
+              .setCustomId("farm_linked_main_id")
+              .setLabel("Enter the Governor ID of the Main Account") // Original label
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMinLength(7)
+              .setMaxLength(10)
+              .setPlaceholder("e.g., 12345678"); // Original placeholder
+
+            const actionRowModal = new ActionRowBuilder().addComponents(
+              mainIdInput
+            );
+            modal.addComponents(actionRowModal);
+
+            // Display the modal using the select menu interaction 'i'
+            await i.showModal(modal);
+            console.log(
+              `[DEBUG] Modal shown for ${i.customId}. Waiting for submission...`
+            );
+
+            // Wait for the modal submission specifically
+            const modalFilter = (modalInteraction) =>
+              modalInteraction.customId === "register_farm_modal" &&
+              modalInteraction.user.id === userId;
+            try {
+              const modalSubmitInteraction = await i.awaitModalSubmit({
+                filter: modalFilter,
+                time: MODAL_AWAIT_TIMEOUT,
+              });
+              console.log(
+                `[DEBUG] Modal submitted by user ${modalSubmitInteraction.user.id}`
+              );
+
+              // Defer the modal submission interaction
+              await modalSubmitInteraction.deferUpdate();
+
+              // Process modal data
+              registrationData.idMainTerhubung =
+                modalSubmitInteraction.fields.getTextInputValue(
+                  "farm_linked_main_id"
+                );
+              console.log(
+                `[DEBUG] ${new Date().toISOString()} - Linked Main ID received from modal: ${
+                  registrationData.idMainTerhubung
+                } in channel ${channelId}`
+              );
+
+              // Request screenshot upload AFTER modal submission
+              try {
+                // Edit the original interaction reply
+                await interaction.editReply({
+                  content: `Linked Main ID set to **${
+                    registrationData.idMainTerhubung
+                  }**. Now, please upload the **FARM** account's profile screenshot. (You have ${
+                    MESSAGE_AWAIT_TIMEOUT / 60000
+                  } minutes)`, // Text + timeout info
+                  embeds: [],
+                  components: [], // Remove previous components
+                });
+              } catch (editErr) {
+                console.error(
+                  `[ERROR] ${new Date().toISOString()} - Failed to edit reply before awaiting farm screenshot in channel ${channelId}:`,
+                  editErr
+                );
+                if (interaction.editable) {
+                  await interaction
+                    .editReply({
+                      content:
+                        "An error occurred preparing the next step. Please try again.",
+                      embeds: [],
+                      components: [],
+                    })
+                    .catch((e) => console.error(e));
+                }
+                collector.stop("error_editing_reply"); // Stop collector if edit fails
+                return; // Exit collect handler
+              }
+
+              // Wait for a message with an image attachment from the user
+              const messageFilter = (m) =>
+                m.author.id === userId && m.attachments.size > 0;
+              try {
+                const collectedMessages =
+                  await interaction.channel.awaitMessages({
+                    filter: messageFilter,
+                    max: 1,
+                    time: MESSAGE_AWAIT_TIMEOUT,
+                    errors: ["time"],
+                  });
+                const userMessage = collectedMessages.first();
+                const attachment = userMessage.attachments.first();
+
+                if (
+                  attachment &&
+                  attachment.contentType?.startsWith("image/")
+                ) {
+                  registrationData.attachment = attachment;
+                  console.log(
+                    `[DEBUG] ${new Date().toISOString()} - Farm screenshot received after modal: ${
+                      attachment.url
+                    } in channel ${channelId}`
+                  );
+                  await showConfirmationPublic(interaction, registrationData); // Use original interaction
+                } else {
+                  await interaction.editReply({
+                    content:
+                      "Invalid file type. Please upload an image. Registration cancelled.",
+                    embeds: [],
+                    components: [],
+                  });
+                  collector.stop("invalid_file");
+                }
+              } catch (msgError) {
+                console.log(
+                  `[WARN] ${new Date().toISOString()} - Timed out waiting for farm screenshot after modal in channel ${channelId}.`
+                );
+                await interaction.editReply({
+                  content: `No valid screenshot uploaded within ${
+                    MESSAGE_AWAIT_TIMEOUT / 60000
+                  } minutes. Registration cancelled. Click /register to try again.`,
+                  embeds: [],
+                  components: [],
+                });
+                collector.stop("timeout");
+              }
+            } catch (modalError) {
+              // Handle modal timeout or other errors
+              console.log(
+                `[WARN] ${new Date().toISOString()} - Modal submission timed out or failed for user ${userId} in channel ${channelId}: ${
+                  modalError.message
+                }`
+              );
+              if (interaction.editable) {
+                await interaction
+                  .editReply({
+                    content: `Modal submission timed out or failed. Registration cancelled. Please click /register to try again.`,
+                    embeds: [],
+                    components: [],
+                  })
+                  .catch((e) =>
+                    console.error("Error sending modal timeout message:", e)
+                  );
+              }
+              collector.stop("modal_timeout");
+            }
+            // --- END MODIFICATION ---
+            return; // Exit collector handler for this interaction path
+          }
+          // --- Handle Confirmation Submit Button (Matches original structure + simple error handling) ---
+          else if (i.customId === "register_confirm_submit") {
+            console.log(
+              `[DEBUG] ${new Date().toISOString()} - Submit confirmed by user ${userId} in channel ${channelId}.`
+            );
+
+            // Validate data before sending to GAS
+            if (!registrationData.attachment) {
+              await interaction.editReply({
+                // Edit original interaction
+                content:
+                  "Error: Screenshot is missing. Please go back and upload it.", // Original error text
+                embeds: [],
+                components: [], // Remove buttons
+              });
+              collector.stop("validation_error"); // Stop collector
+              return; // Stop the submission process
+            }
+            if (
+              registrationData.tipeAkun === "farm" &&
+              !registrationData.idMainTerhubung
+            ) {
+              await interaction.editReply({
+                // Edit original interaction
+                content:
+                  "Error: Linked Main ID is missing for farm account. Please use the Back button and try again.", // Original error text
+                embeds: [],
+                components: [], // Remove buttons
+              });
+              collector.stop("validation_error"); // Stop collector
+              return; // Stop the submission process
+            }
+
+            // Show processing message
+            await interaction.editReply({
+              // Edit original interaction
+              content: "Processing registration... Please wait.", // Original text
+              embeds: [],
+              components: [], // Remove confirmation buttons
+            });
+
+            // Process sending data to Google Apps Script
+            let result = {
+              status: "error",
+              message: "Failed to contact the registration server.",
+            }; // Default result
+            try {
+              // Fetch the image from the URL and convert to base64
+              const imageResponse = await fetch(
+                registrationData.attachment.url
+              );
+              if (!imageResponse.ok) {
+                throw new Error(
+                  `Failed to fetch image: ${imageResponse.statusText}`
+                );
+              }
+              const imageBuffer = await imageResponse.buffer();
+              registrationData.imageBase64 = imageBuffer.toString("base64");
+              console.log(
+                `[DEBUG] ${new Date().toISOString()} - Image converted to base64 for user ${userId} in channel ${channelId}.`
+              );
+
+              // Prepare payload for GAS
+              const payloadData = { ...registrationData };
+              const attachmentUrl = payloadData.attachment?.url;
+              delete payloadData.attachment;
+              payloadData.attachmentUrl = attachmentUrl;
+
+              const gasPayload = {
+                command: "register",
+                data: payloadData,
+              };
+
+              // Send data to Google Apps Script
+              console.log(
+                `[DEBUG] ${new Date().toISOString()} - Sending payload to GAS for user ${userId}. Base64 size: ${
+                  payloadData.imageBase64.length
+                } bytes.`
+              );
+              const gasResponse = await fetch(appsScriptUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(gasPayload),
+              });
+
+              if (!gasResponse.ok) {
+                const errorText = await gasResponse.text();
+                throw new Error(
+                  `GAS Error ${gasResponse.status}: ${errorText}`
+                );
+              }
+
+              result = await gasResponse.json();
+              console.log(
+                `[DEBUG] ${new Date().toISOString()} - Received response from GAS for user ${userId}: ${JSON.stringify(
+                  result
+                )}`
+              );
+            } catch (processError) {
+              console.error(
+                `[ERROR] ${new Date().toISOString()} - Error processing registration or contacting GAS for user ${userId} in channel ${channelId}:`,
+                processError
+              );
+              result = {
+                status: "error",
+                message: `An error occurred during processing: ${processError.message}`,
+              }; // Simple error message
+            }
+
+            // Display the final result to the user (based on GAS response)
+            if (result.status === "success") {
+              console.log(
+                `[INFO] ${new Date().toISOString()} - Registration successful for user ${userId} (via GAS).`
+              );
+              const successEmbed = new EmbedBuilder()
+                .setColor(0x00ff00)
+                .setTitle("✅ Registration Successful!") // Original title
+                .setDescription(result.message || "Account registered.") // Original text
+                .addFields(
+                  {
+                    name: "Governor ID",
+                    value:
+                      result.details?.govId ||
+                      registrationData.idMainTerhubung ||
+                      "N/A",
+                    inline: true,
+                  },
+                  {
+                    name: "Account Type",
+                    value:
+                      result.details?.type ||
+                      (registrationData.tipeAkun === "main"
+                        ? "Main"
+                        : "Farm") ||
+                      "N/A",
+                    inline: true,
+                  }
+                  // Add other fields if needed
+                )
+                .setFooter({
+                  text: `Registered by ${interaction.user.tag}`,
+                }) // Original footer
+                .setTimestamp();
+              if (registrationData.attachment?.url) {
+                successEmbed.setThumbnail(registrationData.attachment.url);
+              }
+
+              await interaction.editReply({
+                // Edit original interaction
+                content: null,
+                embeds: [successEmbed],
+                components: [], // Remove buttons
+              });
+              collector.stop("processed"); // Stop collector successfully
+            } else {
+              // If GAS returned an error or an error occurred during processing
+              console.error(
+                `[ERROR] ${new Date().toISOString()} - Registration failed for user ${userId} (GAS/Process Error): ${
+                  result.message
+                }`
+              );
+              await interaction.editReply({
+                // Edit original interaction
+                content: `Registration failed: ${
+                  result.message || "An error occurred."
+                }`, // Simple error text
+                embeds: [],
+                components: [], // Remove buttons
+              });
+              collector.stop("gas_error"); // Stop the collector due to failure
+            }
+            return; // End handling for this submit
+          }
+        } catch (collectError) {
+          // Handle errors occurring within collector.on('collect')
+          console.error(
+            `[ERROR] ${new Date().toISOString()} - Error handling interaction ${
+              i?.customId
+            } from user ${userId} in channel ${channelId}:`,
+            collectError
+          );
+          // Simple text error handling
+          try {
+            if (interaction.editable) {
+              await interaction.editReply({
+                // Edit original interaction
+                content:
+                  "An error occurred while processing your selection. Please try registering again.", // Original error text
+                embeds: [],
+                components: [], // Remove buttons
+              });
+            }
+          } catch (errorReplyError) {
+            console.error(
+              `[ERROR] ${new Date().toISOString()} - Failed to send error message during collection error handling:`,
+              errorReplyError
+            );
+          }
+          collector.stop("error"); // Stop the collector due to an internal error
+        }
+      }); // End collector.on('collect')
+
+      // --- COLLECTOR END LOGIC (Matches original structure + simple error handling) ---
+      collector.on("end", (collected, reason) => {
+        console.log(
+          `[DEBUG] ${new Date().toISOString()} - Registration collector ended in channel ${channelId}. Reason: ${reason}. Items collected: ${
+            collected.size
+          }`
+        );
+
+        // Only clean up/send a final message if the process hasn't ended normally
+        const handledReasons = [
+          "processed",
+          "cancelled",
+          "gas_error",
+          "error",
+          "invalid_file",
+          "error_editing_reply",
+          "validation_error",
+          "timeout",
+          "modal_timeout",
+        ]; // Add modal_timeout
+
+        // Explicitly handle timeout here to ensure message is sent
+        if (reason === "timeout" && interaction.editable) {
+          // Message already sent in awaitMessages catch block, just log
+          console.log(
+            `[INFO] ${new Date().toISOString()} - Registration process timed out naturally (awaitMessages) for user ${userId} in channel ${channelId}.`
+          );
+        } else if (reason === "modal_timeout" && interaction.editable) {
+          // Message already sent in awaitModalSubmit catch block, just log
+          console.log(
+            `[INFO] ${new Date().toISOString()} - Registration process timed out naturally (awaitModalSubmit) for user ${userId} in channel ${channelId}.`
+          );
+        } else if (interaction.editable && !handledReasons.includes(reason)) {
+          // Handle other unexpected end reasons
+          let endContent =
+            "Registration process ended unexpectedly. Please try /register again."; // Default unexpected
+          interaction
+            .editReply({
+              content: endContent,
+              embeds: [],
+              components: [], // Remove components
+            })
+            .catch((e) =>
+              console.error(
+                `[ERROR] ${new Date().toISOString()} - Failed to edit reply at collector end (reason: ${reason}):`,
+                e
+              )
+            );
+        } else if (reason === "invalid_file" && interaction.editable) {
+          // Message already sent in collect's awaitMessages logic
+          console.log(
+            `[INFO] ${new Date().toISOString()} - Registration process stopped due to invalid file for user ${userId} in channel ${channelId}.`
+          );
+        }
+        // The channel lock will be released by the finally block
+      }); // End collector.on('end')
+    } catch (error) {
+      // Handle major errors outside the collector (e.g., deferReply failed)
+      console.error(
+        `[ERROR] ${new Date().toISOString()} - Major error during registration process in channel ${channelId}:`,
+        error
+      );
+      // Simple text error handling
+      try {
+        if (interaction.editable) {
+          await interaction.editReply({
+            content:
+              "An internal error occurred during the registration setup. Please try again later.", // Simple error text
+            embeds: [],
+            components: [], // Remove components
+          });
+        } else if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: "❌ Failed to start the registration process.", // Simple error text
+            ephemeral: true,
+          });
+        }
+      } catch (e) {
+        console.error(
+          `[ERROR] ${new Date().toISOString()} - Failed to send final error feedback message:`,
+          e
+        );
+      }
+    } finally {
+      // --- CLEANUP BLOCK (ALWAYS RUNS) ---
+      // Always remove the channel lock when the process finishes/errors/times out
+      activeRegistrationChannels.delete(channelId);
+      console.log(
+        `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked.`
+      );
+      // --- END CLEANUP BLOCK ---
+    }
+  }, // End execute function
+}; // End module.exports
