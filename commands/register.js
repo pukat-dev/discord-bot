@@ -21,6 +21,7 @@ const fetch = require("node-fetch"); // Ensure node-fetch v2 is installed (npm i
 const activeRegistrationChannels = new Set();
 // Set global timeout (5 minutes in milliseconds)
 const MESSAGE_AWAIT_TIMEOUT = 300000; // 300,000 ms = 5 minutes
+const MODAL_AWAIT_TIMEOUT = 240000; // Timeout for modal submission (e.g., 4 minutes)
 
 /**
  * Displays the registration data confirmation embed to the user.
@@ -296,9 +297,11 @@ module.exports = {
       const filter = (i) => i.user.id === userId;
 
       // Create a collector for message components (menu, buttons)
+      // This collector will primarily handle button clicks and initial menu selections
       const collector = initialReply.createMessageComponentCollector({
         filter,
-        time: MESSAGE_AWAIT_TIMEOUT, // Use the global timeout
+        // Set a longer time for the overall process, but individual steps have shorter waits
+        time: MESSAGE_AWAIT_TIMEOUT * 2, // e.g., 10 minutes total for the collector
       });
 
       // Object to store temporary registration data (matches original structure)
@@ -323,114 +326,25 @@ module.exports = {
         );
 
         try {
-          // --- MODIFIED: Defer Component Interaction First ---
-          // Defer update for component/modal interactions ('i') first to acknowledge
-          if (!i.deferred) {
-            await i.deferUpdate();
+          // --- Handle Modal Submit (Farm ID) ---
+          // This is now handled by awaitModalSubmit below, so this block can be removed or commented out
+          /*
+                    if (
+                        i.type === InteractionType.ModalSubmit &&
+                        i.customId === "register_farm_modal"
+                    ) {
+                       // ... logic moved ...
+                    }
+                    */
+
+          // --- Defer non-modal/non-showModal interactions ---
+          if (
+            i.type !== InteractionType.ModalSubmit &&
+            i.customId !== "register_select_farm_filler"
+          ) {
+            if (!i.deferred) await i.deferUpdate();
             console.log(`[DEBUG] Interaction ${i.customId} deferred.`);
           }
-          // --- END MODIFICATION ---
-
-          // --- Handle Modal Submit (Farm ID) (Matches original structure) ---
-          if (
-            i.type === InteractionType.ModalSubmit &&
-            i.customId === "register_farm_modal"
-          ) {
-            // Note: deferUpdate was already called above
-            registrationData.idMainTerhubung = i.fields.getTextInputValue(
-              "farm_linked_main_id"
-            );
-            console.log(
-              `[DEBUG] ${new Date().toISOString()} - Linked Main ID received from modal: ${
-                registrationData.idMainTerhubung
-              } in channel ${channelId}`
-            );
-
-            // Request screenshot upload AFTER modal submission
-            try {
-              // Edit the original interaction reply
-              await interaction.editReply({
-                content: `Linked Main ID set to **${
-                  registrationData.idMainTerhubung
-                }**. Now, please upload the **FARM** account's profile screenshot. (You have ${
-                  MESSAGE_AWAIT_TIMEOUT / 60000
-                } minutes)`, // Text + timeout info
-                embeds: [],
-                components: [], // Remove previous components
-              });
-            } catch (editErr) {
-              console.error(
-                `[ERROR] ${new Date().toISOString()} - Failed to edit reply before awaiting farm screenshot in channel ${channelId}:`,
-                editErr
-              );
-              if (interaction.editable) {
-                await interaction
-                  .editReply({
-                    content:
-                      "An error occurred preparing the next step. Please try again.",
-                    embeds: [],
-                    components: [],
-                  })
-                  .catch((e) => console.error(e));
-              }
-              collector.stop("error_editing_reply"); // Stop collector if edit fails
-              return; // Exit collect handler
-            }
-
-            // Wait for a message with an image attachment from the user
-            const messageFilter = (m) =>
-              m.author.id === userId && m.attachments.size > 0;
-            try {
-              const collectedMessages = await interaction.channel.awaitMessages(
-                {
-                  filter: messageFilter,
-                  max: 1,
-                  time: MESSAGE_AWAIT_TIMEOUT,
-                  errors: ["time"],
-                }
-              );
-
-              const userMessage = collectedMessages.first();
-              const attachment = userMessage.attachments.first();
-
-              // Validate that the attachment is an image
-              if (attachment && attachment.contentType?.startsWith("image/")) {
-                registrationData.attachment = attachment;
-                console.log(
-                  `[DEBUG] ${new Date().toISOString()} - Farm screenshot received after modal: ${
-                    attachment.url
-                  } in channel ${channelId}`
-                );
-                // Show the final confirmation step
-                await showConfirmationPublic(interaction, registrationData); // Use original interaction
-              } else {
-                // If the attachment is not an image
-                await interaction.editReply({
-                  content:
-                    "Invalid file type. Please upload an image. Registration cancelled.", // Original error text
-                  embeds: [],
-                  components: [], // Remove buttons
-                });
-                collector.stop("invalid_file"); // Stop the collector
-              }
-            } catch (msgError) {
-              // Handle timeout waiting for the screenshot
-              console.log(
-                `[WARN] ${new Date().toISOString()} - Timed out waiting for farm screenshot after modal in channel ${channelId}.`
-              );
-              await interaction.editReply({
-                content: `No valid screenshot uploaded within ${
-                  MESSAGE_AWAIT_TIMEOUT / 60000
-                } minutes. Registration cancelled. Click /register to try again.`, // Timeout message + instruction
-                embeds: [],
-                components: [], // Remove buttons
-              });
-              collector.stop("timeout"); // Stop the collector
-            }
-            return; // End handling for this modal submit
-          } // End of if (ModalSubmit)
-
-          // Defer update was handled at the beginning of the try block
 
           // --- Handle Cancel Button (Matches original structure) ---
           if (i.customId === "register_cancel") {
@@ -547,9 +461,10 @@ module.exports = {
               embeds: [],
               components: nextComponents,
             });
+            // No deferUpdate needed here as editReply acknowledges 'i'
             console.log(
               `[DEBUG] Original interaction edited for ${i.customId}.`
-            ); // Log edit success
+            );
           }
           // --- Handle Main Status Selection (Matches original structure) ---
           else if (i.customId === "register_select_main_status") {
@@ -640,7 +555,8 @@ module.exports = {
           }
           // --- Handle Farm Filler Selection (Using Dropdown) ---
           else if (i.customId === "register_select_farm_filler") {
-            // Check for the new select menu ID
+            // NOTE: deferUpdate was SKIPPED for this interaction 'i' earlier
+
             const selectedValue = i.values[0]; // Get the selected value ("yes" or "no")
             registrationData.isFiller = selectedValue === "yes"; // Set boolean based on value
             console.log(
@@ -649,9 +565,9 @@ module.exports = {
               } by user ${userId} in channel ${channelId}`
             );
 
-            // Show the modal to ask for the Linked Main ID
+            // --- MODIFIED: Show Modal and Await Submission ---
             const modal = new ModalBuilder()
-              .setCustomId("register_farm_modal")
+              .setCustomId("register_farm_modal") // Keep the same modal ID
               .setTitle("Farm Account Details"); // Original title
 
             const mainIdInput = new TextInputBuilder()
@@ -668,9 +584,139 @@ module.exports = {
             );
             modal.addComponents(actionRowModal);
 
-            // Display the modal to the user ('i' is the select menu interaction)
+            // Display the modal using the select menu interaction 'i'
             await i.showModal(modal);
-            // The flow continues when the modal is submitted
+            console.log(
+              `[DEBUG] Modal shown for ${i.customId}. Waiting for submission...`
+            );
+
+            // Wait for the modal submission specifically
+            const modalFilter = (modalInteraction) =>
+              modalInteraction.customId === "register_farm_modal" &&
+              modalInteraction.user.id === userId;
+            try {
+              const modalSubmitInteraction = await i.awaitModalSubmit({
+                filter: modalFilter,
+                time: MODAL_AWAIT_TIMEOUT,
+              });
+              console.log(
+                `[DEBUG] Modal submitted by user ${modalSubmitInteraction.user.id}`
+              );
+
+              // Defer the modal submission interaction
+              await modalSubmitInteraction.deferUpdate();
+
+              // Process modal data
+              registrationData.idMainTerhubung =
+                modalSubmitInteraction.fields.getTextInputValue(
+                  "farm_linked_main_id"
+                );
+              console.log(
+                `[DEBUG] ${new Date().toISOString()} - Linked Main ID received from modal: ${
+                  registrationData.idMainTerhubung
+                } in channel ${channelId}`
+              );
+
+              // Request screenshot upload AFTER modal submission
+              try {
+                // Edit the original interaction reply
+                await interaction.editReply({
+                  content: `Linked Main ID set to **${
+                    registrationData.idMainTerhubung
+                  }**. Now, please upload the **FARM** account's profile screenshot. (You have ${
+                    MESSAGE_AWAIT_TIMEOUT / 60000
+                  } minutes)`, // Text + timeout info
+                  embeds: [],
+                  components: [], // Remove previous components
+                });
+              } catch (editErr) {
+                console.error(
+                  `[ERROR] ${new Date().toISOString()} - Failed to edit reply before awaiting farm screenshot in channel ${channelId}:`,
+                  editErr
+                );
+                if (interaction.editable) {
+                  await interaction
+                    .editReply({
+                      content:
+                        "An error occurred preparing the next step. Please try again.",
+                      embeds: [],
+                      components: [],
+                    })
+                    .catch((e) => console.error(e));
+                }
+                collector.stop("error_editing_reply"); // Stop collector if edit fails
+                return; // Exit collect handler
+              }
+
+              // Wait for a message with an image attachment from the user
+              const messageFilter = (m) =>
+                m.author.id === userId && m.attachments.size > 0;
+              try {
+                const collectedMessages =
+                  await interaction.channel.awaitMessages({
+                    filter: messageFilter,
+                    max: 1,
+                    time: MESSAGE_AWAIT_TIMEOUT,
+                    errors: ["time"],
+                  });
+                const userMessage = collectedMessages.first();
+                const attachment = userMessage.attachments.first();
+
+                if (
+                  attachment &&
+                  attachment.contentType?.startsWith("image/")
+                ) {
+                  registrationData.attachment = attachment;
+                  console.log(
+                    `[DEBUG] ${new Date().toISOString()} - Farm screenshot received after modal: ${
+                      attachment.url
+                    } in channel ${channelId}`
+                  );
+                  await showConfirmationPublic(interaction, registrationData); // Use original interaction
+                } else {
+                  await interaction.editReply({
+                    content:
+                      "Invalid file type. Please upload an image. Registration cancelled.",
+                    embeds: [],
+                    components: [],
+                  });
+                  collector.stop("invalid_file");
+                }
+              } catch (msgError) {
+                console.log(
+                  `[WARN] ${new Date().toISOString()} - Timed out waiting for farm screenshot after modal in channel ${channelId}.`
+                );
+                await interaction.editReply({
+                  content: `No valid screenshot uploaded within ${
+                    MESSAGE_AWAIT_TIMEOUT / 60000
+                  } minutes. Registration cancelled. Click /register to try again.`,
+                  embeds: [],
+                  components: [],
+                });
+                collector.stop("timeout");
+              }
+            } catch (modalError) {
+              // Handle modal timeout or other errors
+              console.log(
+                `[WARN] ${new Date().toISOString()} - Modal submission timed out or failed for user ${userId} in channel ${channelId}: ${
+                  modalError.message
+                }`
+              );
+              if (interaction.editable) {
+                await interaction
+                  .editReply({
+                    content: `Modal submission timed out or failed. Registration cancelled. Please click /register to try again.`,
+                    embeds: [],
+                    components: [],
+                  })
+                  .catch((e) =>
+                    console.error("Error sending modal timeout message:", e)
+                  );
+              }
+              collector.stop("modal_timeout");
+            }
+            // --- END MODIFICATION ---
+            return; // Exit collector handler for this interaction path
           }
           // --- Handle Confirmation Submit Button (Matches original structure + simple error handling) ---
           else if (i.customId === "register_confirm_submit") {
@@ -892,24 +938,20 @@ module.exports = {
           "error_editing_reply",
           "validation_error",
           "timeout",
-        ]; // Add timeout here as it's handled in catch
+          "modal_timeout",
+        ]; // Add modal_timeout
 
-        // --- MODIFIED: Explicitly handle timeout here to ensure message is sent ---
+        // Explicitly handle timeout here to ensure message is sent
         if (reason === "timeout" && interaction.editable) {
-          interaction
-            .editReply({
-              content: `Registration timed out after ${
-                MESSAGE_AWAIT_TIMEOUT / 60000
-              } minutes. Click /register to try again.`, // Consistent timeout message
-              embeds: [],
-              components: [], // Remove components
-            })
-            .catch((e) =>
-              console.error(
-                `[ERROR] ${new Date().toISOString()} - Failed to edit reply on collector end (reason: ${reason}):`,
-                e
-              )
-            );
+          // Message already sent in awaitMessages catch block, just log
+          console.log(
+            `[INFO] ${new Date().toISOString()} - Registration process timed out naturally (awaitMessages) for user ${userId} in channel ${channelId}.`
+          );
+        } else if (reason === "modal_timeout" && interaction.editable) {
+          // Message already sent in awaitModalSubmit catch block, just log
+          console.log(
+            `[INFO] ${new Date().toISOString()} - Registration process timed out naturally (awaitModalSubmit) for user ${userId} in channel ${channelId}.`
+          );
         } else if (interaction.editable && !handledReasons.includes(reason)) {
           // Handle other unexpected end reasons
           let endContent =
