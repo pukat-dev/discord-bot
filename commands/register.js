@@ -13,6 +13,7 @@ const {
   TextInputStyle,
   ComponentType,
   InteractionType,
+  MessageFlags, // Import MessageFlags
 } = require("discord.js");
 const fetch = require("node-fetch"); // Ensure node-fetch v2 is installed (npm install node-fetch@2)
 
@@ -26,6 +27,7 @@ const MODAL_AWAIT_TIMEOUT = 240000; // Timeout for modal submission (e.g., 4 min
 
 /**
  * Displays the registration data confirmation embed to the user.
+ * (Function remains the same as previous English version)
  * @param {import('discord.js').ChatInputCommandInteraction | import('discord.js').Interaction} interaction
  * @param {object} data
  * @param {boolean} [farmNeedsModalId=false]
@@ -129,7 +131,7 @@ async function showConfirmationPublic(
           content: confirmationMessage,
           embeds: [confirmEmbed],
           components: [confirmRow],
-          ephemeral: false,
+          // ephemeral: false, // Default is non-ephemeral
         });
       }
     } else if (interaction.isRepliable()) {
@@ -174,12 +176,13 @@ async function showConfirmationPublic(
       ) {
         await interaction.reply({
           content: errorMessage,
-          ephemeral: true,
+          flags: [MessageFlags.Ephemeral], // Use flags
         });
       } else if (interaction.isRepliable()) {
+        // If interaction was replied/deferred, follow-up
         await interaction.followUp({
           content: errorMessage,
-          ephemeral: true,
+          flags: [MessageFlags.Ephemeral], // Use flags
         });
       }
     } catch (e) {
@@ -215,7 +218,7 @@ module.exports = {
       await interaction.reply({
         content:
           "⚠️ Sorry, another registration process is already active in this channel. Please wait until it's completed or cancelled.", // English Lock message
-        ephemeral: true,
+        flags: [MessageFlags.Ephemeral], // Use flags
       });
       console.log(
         `[WARN] ${new Date().toISOString()} - /register blocked in channel ${channelId} due to active registration (checked shared Set).`
@@ -229,33 +232,73 @@ module.exports = {
     );
 
     try {
-      // Defer reply
+      // Defer reply (publicly)
       try {
-        await interaction.deferReply({ ephemeral: false });
+        // Public defer, no ephemeral needed. Acknowledge interaction quickly.
+        await interaction.deferReply();
         console.log(
           `[DEBUG] ${new Date().toISOString()} - Interaction publicly deferred in channel ${channelId}.`
         );
       } catch (deferError) {
         console.error(
           `[ERROR] ${new Date().toISOString()} - Error deferring public reply in channel ${channelId}:`,
-          deferError
+          deferError // Log the actual error object
         );
+        // Unlock channel if defer fails
         activeRegistrationChannels.delete(channelId);
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to defer error (in register.js).`
         );
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction
-            .reply({
+
+        // If defer fails, the interaction is likely invalid. Try sending a channel message instead of replying/following up.
+        // Check if the error indicates the interaction was already acknowledged or unknown
+        if (deferError.code === 40060 || deferError.code === 10062) {
+          console.warn(
+            `[WARN] Initial defer failed (Code: ${deferError.code}). Interaction likely already acknowledged or unknown.`
+          );
+          // Optionally try sending a message to the channel if appropriate
+          try {
+            await interaction.channel.send({
+              content: `⚠️ Could not start registration for ${interaction.user}. The interaction might have expired or been acknowledged elsewhere. Please try /register again.`,
+            });
+          } catch (sendError) {
+            console.error(
+              "[ERROR] Failed to send channel message after defer failure:",
+              sendError
+            );
+          }
+        } else if (!interaction.replied && !interaction.deferred) {
+          // For other defer errors, attempt an ephemeral reply if possible (though likely to fail if interaction is broken)
+          try {
+            await interaction.reply({
               content:
                 "❌ Failed to start the registration process due to an internal error.", // English Error text
-              ephemeral: true,
-            })
-            .catch((e) =>
-              console.error("Error sending initial defer error reply:", e)
+              flags: [MessageFlags.Ephemeral], // Use flags
+            });
+          } catch (replyError) {
+            console.error(
+              "[ERROR] Failed to send ephemeral reply after other defer error:",
+              replyError
             );
+            // Fallback: Try sending a message to the channel
+            try {
+              await interaction.channel.send({
+                content: `❌ An internal error occurred starting registration for ${interaction.user}. Please try again later.`,
+              });
+            } catch (sendError) {
+              console.error(
+                "[ERROR] Failed to send channel message after reply failure:",
+                sendError
+              );
+            }
+          }
+        } else {
+          // If already replied/deferred somehow, log it.
+          console.warn(
+            `[WARN] Interaction ${interaction.id} was already replied/deferred when initial defer failed with code ${deferError.code}.`
+          );
         }
-        return;
+        return; // Stop execution if defer fails
       }
 
       // Initial embed in English
@@ -293,13 +336,13 @@ module.exports = {
         cancelButtonInitial
       );
 
-      // Send initial message
+      // Send initial message (edit the deferred reply)
       let initialReply;
       try {
         initialReply = await interaction.editReply({
           embeds: [initialEmbed],
           components: [selectRow, buttonRowInitial],
-          fetchReply: true,
+          fetchReply: true, // Get the message object for the collector
         });
         console.log(
           `[DEBUG] ${new Date().toISOString()} - Initial public registration message sent in channel ${channelId}. Message ID: ${
@@ -308,13 +351,15 @@ module.exports = {
         );
       } catch (editErr) {
         console.error(
-          `[ERROR] ${new Date().toISOString()} - Failed to send initial registration message in channel ${channelId}:`,
+          `[ERROR] ${new Date().toISOString()} - Failed to send initial registration message (editReply) in channel ${channelId}:`,
           editErr
         );
+        // Unlock channel if editReply fails
         activeRegistrationChannels.delete(channelId);
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to initial editReply error (in register.js).`
         );
+        // Attempt to edit the reply again with an error message if possible
         if (interaction.editable) {
           await interaction
             .editReply({
@@ -327,29 +372,21 @@ module.exports = {
               console.error("Error sending initial setup error message:", e)
             );
         }
-        return;
+        return; // Stop execution
       }
 
       // Interaction filter
       const filter = (i) => i.user.id === userId;
 
-      // Collector setup
+      // Collector setup - ONLY for timeout detection on the initial message
       const collector = initialReply.createMessageComponentCollector({
-        filter,
+        filter, // Filter still useful for timeout logic if needed, but doesn't handle interactions
         time: MESSAGE_AWAIT_TIMEOUT,
         dispose: true,
       });
 
-      // Collector collect event (logging only)
-      collector.on("collect", async (i) => {
-        console.log(
-          `[DEBUG] ${new Date().toISOString()} - Collector (in register.js) observed interaction: ${
-            i.customId
-          } from user ${i.user.id} on message ${
-            initialReply.id
-          }. Expecting index.js to handle.`
-        );
-      });
+      // REMOVED collector.on('collect') to prevent double acknowledgements.
+      // All component interaction handling MUST be in index.js's InteractionCreate listener.
 
       // Collector end event (handles timeout)
       collector.on("end", (collected, reason) => {
@@ -364,7 +401,7 @@ module.exports = {
             `[INFO] Registration process timed out for message ${messageId} in channel ${channelId}.`
           );
 
-          // Unlock channel if still locked
+          // Unlock channel if still locked (check using the passed Set)
           if (activeRegistrationChannels.has(channelId)) {
             activeRegistrationChannels.delete(channelId);
             console.log(
@@ -374,12 +411,15 @@ module.exports = {
             console.log(
               `[DEBUG] Channel ${channelId} was already unlocked when collector timed out (message ${messageId}).`
             );
+            // Note: State in index.js might still exist and needs separate cleanup if timeout isn't handled there too.
           }
 
           // Edit the original message to indicate timeout in English
+          // Use interaction.channel.messages.fetch as initialReply might be outdated
           interaction.channel.messages
             .fetch(messageId)
             .then(async (finalMessageState) => {
+              // Check if the message still exists and has components (indicating it wasn't completed/cancelled)
               if (
                 finalMessageState &&
                 finalMessageState.components.length > 0
@@ -388,7 +428,7 @@ module.exports = {
                   .edit({
                     content: `⏰ This registration has expired due to inactivity. Please start over using /register.`, // English timeout message
                     embeds: [],
-                    components: [],
+                    components: [], // Remove components
                   })
                   .catch((e) =>
                     console.error(
@@ -400,8 +440,9 @@ module.exports = {
                   `[DEBUG] Edited message ${messageId} to show timeout.`
                 );
               } else {
+                // Message might have been deleted or components removed by successful completion/cancellation in index.js
                 console.log(
-                  `[DEBUG] Message ${messageId} either deleted or already completed/cancelled. No timeout edit needed.`
+                  `[DEBUG] Message ${messageId} components already removed or message deleted. No timeout edit needed.`
                 );
               }
             })
@@ -419,6 +460,7 @@ module.exports = {
               }
             });
         }
+        // Other 'end' reasons (like 'messageDelete') don't require specific action here now.
       }); // End collector.on('end')
     } catch (error) {
       // Handle major errors during setup
@@ -426,6 +468,7 @@ module.exports = {
         `[ERROR] ${new Date().toISOString()} - Major error during /register command execution in channel ${channelId}:`,
         error
       );
+      // Unlock channel on major error
       activeRegistrationChannels.delete(channelId);
       console.log(
         `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked due to major error (in register.js).`
@@ -435,16 +478,34 @@ module.exports = {
         const majorErrorMessage =
           "An internal error occurred during the registration setup. Please try again later."; // English Error text
         if (interaction.editable) {
+          // Try editing the potentially deferred reply
           await interaction.editReply({
             content: majorErrorMessage,
             embeds: [],
             components: [],
           });
-        } else if (!interaction.replied && !interaction.deferred) {
+        } else if (
+          !interaction.replied &&
+          !interaction.deferred &&
+          interaction.isRepliable()
+        ) {
+          // If not deferred/replied yet, send an ephemeral reply
           await interaction.reply({
             content: "❌ Failed to start the registration process.", // English Error text
-            ephemeral: true,
+            flags: [MessageFlags.Ephemeral], // Use flags
           });
+        } else {
+          // If already replied/deferred or not repliable, try sending to channel
+          await interaction.channel
+            .send({
+              content: `❌ An internal error occurred starting registration for ${interaction.user}. Please try again later.`,
+            })
+            .catch((e) =>
+              console.error(
+                "[ERROR] Failed to send channel message on major error:",
+                e
+              )
+            );
         }
       } catch (e) {
         console.error(
