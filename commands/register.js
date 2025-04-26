@@ -18,7 +18,7 @@ const fetch = require("node-fetch"); // Ensure node-fetch v2 is installed (npm i
 
 // --- CHANNEL LOCK & TIMEOUT ---
 // Set to track channels with active registrations
-const activeRegistrationChannels = new Set();
+const activeRegistrationChannels = new Set(); // Kunci ditambahkan di sini
 // Set global timeout (5 minutes in milliseconds)
 const MESSAGE_AWAIT_TIMEOUT = 300000; // 300,000 ms = 5 minutes
 const MODAL_AWAIT_TIMEOUT = 240000; // Timeout for modal submission (e.g., 4 minutes)
@@ -119,23 +119,17 @@ async function showConfirmationPublic(
   // Send or edit the message with the confirmation embed and buttons
   try {
     // Use editReply on the interaction that led to this confirmation
-    if (
-      !interaction.isRepliable() ||
-      interaction.replied ||
-      interaction.deferred
-    ) {
-      // If we can't edit the original reply (e.g., modal submit), use followUp or edit the original message if possible
-      // For simplicity here, we assume editReply works on the interaction passed.
-      // A more robust solution might involve fetching the original message by ID.
+    // Check if the interaction is still valid and can be replied to or edited
+    if (interaction.replied || interaction.deferred) {
+      // If already replied/deferred (e.g., from deferUpdate), try editing the original message if possible
       if (interaction.message) {
-        // If it's a component interaction with a message reference
         await interaction.message.edit({
           content: "Please review your registration details below and confirm:",
           embeds: [confirmEmbed],
           components: [confirmRow],
         });
       } else {
-        // Fallback if no message reference (might happen in edge cases)
+        // Fallback: Follow up if message reference isn't available
         await interaction.followUp({
           content: "Please review your registration details below and confirm:",
           embeds: [confirmEmbed],
@@ -143,12 +137,18 @@ async function showConfirmationPublic(
           ephemeral: false, // Make it public if following up
         });
       }
-    } else {
+    } else if (interaction.isRepliable()) {
+      // If not replied/deferred yet, use editReply (common case for initial command)
       await interaction.editReply({
         content: "Please review your registration details below and confirm:", // Original text
         embeds: [confirmEmbed],
         components: [confirmRow], // Add the buttons
       });
+    } else {
+      console.warn(
+        `[WARN] Interaction ${interaction.id} is not repliable, deferred, or replied.`
+      );
+      // Cannot update the interaction directly
     }
 
     console.log(
@@ -165,7 +165,8 @@ async function showConfirmationPublic(
     );
     // Simple text error handling, matching original style but removing components
     try {
-      if (interaction.message) {
+      // Attempt to edit the original message if possible
+      if (interaction.message && !interaction.message.deleted) {
         await interaction.message
           .edit({
             content: "Error displaying confirmation. Please try again.", // Original error text
@@ -177,14 +178,15 @@ async function showConfirmationPublic(
           );
       } else if (
         interaction.isRepliable() &&
-        !interaction.replied &&
-        !interaction.deferred
+        !(interaction.replied || interaction.deferred)
       ) {
+        // If interaction is fresh and hasn't been replied to
         await interaction.reply({
           content: "Error displaying confirmation.",
           ephemeral: true,
         });
       } else if (interaction.isRepliable()) {
+        // If interaction was replied/deferred, follow up
         await interaction.followUp({
           content: "Error displaying confirmation.",
           ephemeral: true,
@@ -233,12 +235,14 @@ module.exports = {
     // --- END CHANNEL LOCK CHECK ---
 
     // If not locked, add the channel to the Set (lock the channel)
+    // KUNCI DITAMBAHKAN DI SINI
     activeRegistrationChannels.add(channelId);
     console.log(
       `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} locked for registration.`
     );
 
-    // Use try...finally to ensure the lock is always released
+    // NOTE: The 'finally' block for releasing the lock is REMOVED here.
+    // Lock release MUST be handled in index.js where the flow concludes.
     try {
       // --- START MAIN LOGIC ---
 
@@ -253,7 +257,12 @@ module.exports = {
           `[ERROR] ${new Date().toISOString()} - Error deferring public reply in channel ${channelId}:`,
           deferError
         );
-        // Simple text error reply if possible
+        // --- KUNCI DIHAPUS JIKA DEFER GAGAL ---
+        activeRegistrationChannels.delete(channelId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to defer error.`
+        );
+        // ---
         if (!interaction.replied && !interaction.deferred) {
           await interaction
             .reply({
@@ -265,7 +274,7 @@ module.exports = {
               console.error("Error sending initial defer error reply:", e)
             );
         }
-        return; // Stop execution (finally will still run)
+        return; // Stop execution
       }
 
       // --- STEP 1: ACCOUNT TYPE SELECTION (Matches original structure) ---
@@ -319,6 +328,12 @@ module.exports = {
           `[ERROR] ${new Date().toISOString()} - Failed to send initial registration message in channel ${channelId}:`,
           editErr
         );
+        // --- KUNCI DIHAPUS JIKA EDITREPLY AWAL GAGAL ---
+        activeRegistrationChannels.delete(channelId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to initial editReply error.`
+        );
+        // ---
         if (interaction.editable) {
           await interaction
             .editReply({
@@ -331,208 +346,64 @@ module.exports = {
               console.error("Error sending initial setup error message:", e)
             );
         }
-        return; // Stop execution (finally will still run)
+        return; // Stop execution
       }
 
       // Interaction filter: only from the user who initiated the command
       const filter = (i) => i.user.id === userId;
 
-      // Create a collector for message components (menu, buttons) on the INITIAL reply
-      // This collector might now only be useful for overall timeout or potentially
-      // handling components NOT managed by the global InteractionCreate listener (if any).
+      // Create a collector primarily for timeout detection on the initial message
       const collector = initialReply.createMessageComponentCollector({
         filter,
-        // Set a longer time for the overall process
-        time: MESSAGE_AWAIT_TIMEOUT * 2, // e.g., 10 minutes total for the collector
+        time: MESSAGE_AWAIT_TIMEOUT * 2, // Long timeout, actual step timeouts handled in index.js
+        dispose: true, // Try to clean up listeners
       });
 
-      // Object to store temporary registration data (might be less necessary here if index.js manages state)
-      let registrationData = {
-        discordUserId: userId,
-        discordUsername: username,
-        tipeAkun: null,
-        statusMain: null,
-        isFiller: null,
-        idMainTerhubung: null,
-        imageBase64: null,
-        attachment: null, // Store attachment object { url: '...', contentType: '...' }
-        attachmentUrl: null, // Store only URL for GAS payload
-      };
-
-      // --- COLLECTOR LOGIC ---
+      // --- COLLECTOR LOGIC (Minimal, mostly for logging/timeout) ---
       collector.on("collect", async (i) => {
-        // 'i' is the component/modal interaction collected on the initialReply message
+        // Log collection but expect index.js to handle the interaction logic
         console.log(
-          `[DEBUG] ${new Date().toISOString()} - Collector collected interaction: ${
+          `[DEBUG] ${new Date().toISOString()} - Collector observed interaction: ${
             i.customId
-          } from user ${i.user.id} on message ${initialReply.id}`
+          } from user ${i.user.id} on message ${
+            initialReply.id
+          }. Expecting index.js to handle.`
         );
-
-        // NOTE: Most component interactions (select menus, buttons defined in index.js steps)
-        // will likely be handled by the global InteractionCreate listener in index.js FIRST.
-        // This collector might catch them too, but the index.js handler should ideally
-        // update the state and UI. This collector might primarily serve as a timeout mechanism
-        // or handle components specific ONLY to the initial message (like the initial cancel button if not handled globally).
-
-        try {
-          // --- Handle interactions SPECIFIC to the initial message if not handled globally ---
-          // Example: If the initial cancel button wasn't handled in index.js
-          if (
-            i.customId === "register_cancel" &&
-            i.message.id === initialReply.id
-          ) {
-            console.log(`[DEBUG] Initial cancel button clicked in collector.`);
-            // Defer if not already handled
-            if (!i.deferred && !i.replied) await i.deferUpdate();
-            // Stop the collector
-            collector.stop("cancelled_initial");
-            // Edit the original message (handled by index.js InteractionCreate, but added here as fallback/example)
-            // await i.message.edit({ content: "Registration cancelled.", embeds: [], components: [] });
-            return;
-          }
-
-          // --- REMOVED: Handling for 'register_select_account_type' ---
-          // The UI update logic for this interaction is now fully handled by
-          // the InteractionCreate listener in index.js calling handleAccountTypeSelection.
-          /*
-            if (i.customId === 'register_select_account_type') {
-              // Keep track of the selected type if needed by other collector logic
-              registrationData.tipeAkun = i.values[0];
-              console.log(
-                `[DEBUG] ${new Date().toISOString()} - Account type selected in collector: ${
-                  registrationData.tipeAkun
-                } by user ${userId} in channel ${channelId}. UI update handled by InteractionCreate.`
-              );
-  
-               // --- UI UPDATE LOGIC REMOVED ---
-  
-              // Let the InteractionCreate listener in index.js handle the UI update.
-            }
-            */
-
-          // --- REMOVED: Handling for 'register_select_main_status' ---
-          // This should be handled by InteractionCreate in index.js
-          /*
-            else if (i.customId === 'register_select_main_status') {
-               // ... logic removed ...
-            }
-            */
-
-          // --- REMOVED: Handling for 'register_select_farm_filler' and subsequent modal/screenshot ---
-          // This should be handled by InteractionCreate in index.js
-          /*
-            else if (i.customId === 'register_select_farm_filler') {
-               // ... logic removed ...
-            }
-            */
-
-          // --- REMOVED: Handling for 'register_confirm_submit' ---
-          // This button is added by index.js later in the flow, so InteractionCreate should handle it.
-          /*
-             else if (i.customId === 'register_confirm_submit') {
-                  // ... logic removed ...
-             }
-             */
-
-          // --- REMOVED: Handling for 'register_confirm_back' / 'register_back_to_type' ---
-          // These buttons are added by index.js, so InteractionCreate should handle them.
-          /*
-             if (
-              i.customId === "register_confirm_back" ||
-              i.customId === "register_back_to_type"
-             ) {
-                // ... logic removed ...
-             }
-             */
-
-          // If the collected interaction wasn't one specifically handled above (like the initial cancel),
-          // it's likely being handled by the global InteractionCreate listener. Log it.
-          if (i.customId !== "register_cancel") {
-            // Avoid logging cancel again if handled above
-            console.log(
-              `[DEBUG] Collector observed interaction ${i.customId}, assuming handled by global listener.`
-            );
-            // Optionally reset collector timer here if needed: collector.resetTimer();
-          }
-        } catch (collectError) {
-          // Handle errors occurring within collector.on('collect')
-          console.error(
-            `[ERROR] ${new Date().toISOString()} - Error handling interaction ${
-              i?.customId
-            } within collector for message ${initialReply.id}:`,
-            collectError
-          );
-          // Stop the collector on error
-          collector.stop("collector_error");
-        }
-      }); // End collector.on('collect')
+        // No UI updates or state changes here
+      });
 
       // --- COLLECTOR END LOGIC ---
       collector.on("end", (collected, reason) => {
         console.log(
           `[DEBUG] ${new Date().toISOString()} - Registration collector for message ${
             initialReply.id
-          } ended. Reason: ${reason}. Items collected: ${collected.size}`
+          } ended. Reason: ${reason}.`
         );
 
-        // Remove the channel lock regardless of the reason
-        activeRegistrationChannels.delete(channelId);
-        console.log(
-          `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked via collector end.`
-        );
+        // --- PENGHAPUSAN KUNCI DIHAPUS DARI SINI ---
+        // activeRegistrationChannels.delete(channelId);
+        // console.log( `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked via collector end.` );
+        // ---
 
-        // Check if the original message still exists and hasn't been completed/cancelled by index.js
+        // Optional: Check if the message still exists and might need cleanup if timeout occurred
+        // But rely on index.js to handle the primary cleanup and lock release.
         interaction.channel.messages
           .fetch(initialReply.id)
-          .then(async (finalMessageState) => {
-            // Only intervene if the process seems abandoned (e.g., timeout without completion)
-            // and the message still has components (indicating it wasn't finished)
-            const handledReasons = [
-              "processed", // Assuming index.js emits this on success
-              "cancelled", // Assuming index.js emits this on user cancel
-              "cancelled_initial", // Handled by collector cancel
-              "collector_error", // Handled by collector error
-              // Add other reasons emitted by index.js if known
-            ];
-
+          .then((finalMessageState) => {
             if (
-              !handledReasons.includes(reason) &&
-              finalMessageState.components.length > 0
+              reason === "time" &&
+              finalMessageState?.components?.length > 0
             ) {
               console.log(
-                `[WARN] Collector ended with reason '${reason}', attempting to clean up message ${initialReply.id}`
+                `[WARN] Collector timed out for message ${initialReply.id}. index.js should handle final state and lock.`
               );
-              let endContent =
-                "Registration process timed out or ended unexpectedly.";
-              if (reason === "time") {
-                endContent = `Registration timed out. Please use /register to try again.`;
-              }
-              await finalMessageState
-                .edit({
-                  content: endContent,
-                  embeds: [],
-                  components: [], // Remove components
-                })
-                .catch((e) =>
-                  console.error(
-                    `[ERROR] Failed to edit message ${initialReply.id} at collector end:`,
-                    e
-                  )
-                );
-            } else {
-              console.log(
-                `[DEBUG] Collector ended for message ${initialReply.id}. Reason (${reason}) indicates process likely handled elsewhere or completed.`
-              );
+              // Optionally edit message here as a fallback, but index.js is preferred
+              // finalMessageState.edit({ content: "Registration timed out.", embeds: [], components: [] }).catch(e => {});
             }
           })
           .catch((err) => {
-            // Handle case where the message might have been deleted
-            if (err.code === 10008) {
-              // Unknown Message
-              console.log(
-                `[DEBUG] Collector ended for message ${initialReply.id}, but message was not found (likely deleted or process completed). Reason: ${reason}`
-              );
-            } else {
+            if (err.code !== 10008) {
+              // Ignore "Unknown Message"
               console.error(
                 `[ERROR] Failed to fetch message ${initialReply.id} at collector end:`,
                 err
@@ -541,30 +412,28 @@ module.exports = {
           });
       }); // End collector.on('end')
     } catch (error) {
-      // Handle major errors outside the collector (e.g., deferReply failed)
+      // Handle major errors during setup
       console.error(
         `[ERROR] ${new Date().toISOString()} - Major error during /register command execution in channel ${channelId}:`,
         error
       );
-      // Ensure lock is released even if error happens before finally
+      // --- KUNCI DIHAPUS JIKA TERJADI ERROR BESAR ---
       activeRegistrationChannels.delete(channelId);
       console.log(
         `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked due to major error.`
       );
-      // Simple text error handling
+      // ---
       try {
         if (interaction.editable) {
-          // If deferReply succeeded but something else failed
           await interaction.editReply({
             content:
-              "An internal error occurred during the registration setup. Please try again later.", // Simple error text
+              "An internal error occurred during the registration setup. Please try again later.",
             embeds: [],
-            components: [], // Remove components
+            components: [],
           });
         } else if (!interaction.replied && !interaction.deferred) {
-          // If deferReply failed
           await interaction.reply({
-            content: "❌ Failed to start the registration process.", // Simple error text
+            content: "❌ Failed to start the registration process.",
             ephemeral: true,
           });
         }
@@ -575,7 +444,5 @@ module.exports = {
         );
       }
     }
-    // NOTE: The 'finally' block was removed as cleanup is now handled
-    // within the collector's 'end' event and the main catch block.
   }, // End execute function
 }; // End module.exports

@@ -1,4 +1,4 @@
-// index.js (Complete English Version with Fixes v2)
+// index.js (Complete English Version with Fixes v3 - Channel Lock Handling)
 require("dotenv").config(); // Ensure environment variables/secrets are loaded
 const {
   Client,
@@ -15,7 +15,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  MessageFlags, // <-- Added for ephemeral flags
+  MessageFlags,
 } = require("discord.js");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -23,12 +23,15 @@ const fetch = require("node-fetch"); // Ensure node-fetch@2 is installed if usin
 
 // State management
 const registrationState = new Map();
+// --- CHANNEL LOCK MANAGEMENT ---
+// Define the Set here to be managed by index.js
+const activeRegistrationChannels = new Set();
+// ---
 
 // Load Credentials & Configuration
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const appsScriptUrl = process.env.APPS_SCRIPT_WEB_APP_URL;
-// const gcpApiKey = process.env.GCP_API_KEY; // Uncomment if needed
 
 if (!token) {
   console.error(
@@ -86,20 +89,19 @@ client.once(Events.ClientReady, (readyClient) => {
   console.log(`>>> Bot Ready! Logged in as ${readyClient.user.tag} <<<`);
 });
 
-// --- FUNCTION MOVED HERE (BEFORE InteractionCreate) ---
 // Fungsi ini menangani logika setelah tipe akun dipilih
 async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
   console.log(
     `[Function] handleAccountTypeSelection called for type: ${selectedType}`
   );
+  const channelId = interaction.channel?.id; // Get channel ID for potential lock release on error
+
   try {
     // Asumsi interaction sudah di-defer SEBELUM memanggil fungsi ini
     if (!interaction.deferred && !interaction.replied) {
       console.warn(
         `[WARN] handleAccountTypeSelection called on non-deferred/replied interaction ${interaction.id}`
       );
-      // Seharusnya tidak terjadi jika dipanggil dari handler yang benar
-      // Jika terjadi, coba defer sebagai fallback
       try {
         await interaction.deferUpdate();
       } catch (deferError) {
@@ -107,7 +109,14 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
           `[ERROR] Fallback deferUpdate failed in handleAccountTypeSelection:`,
           deferError
         );
-        // Tidak bisa melanjutkan jika defer gagal
+        // --- HAPUS KUNCI JIKA GAGAL ---
+        if (channelId) {
+          activeRegistrationChannels.delete(channelId);
+          console.log(
+            `[DEBUG] Channel ${channelId} unlocked due to handleAccountTypeSelection defer error.`
+          );
+        }
+        // ---
         return;
       }
     }
@@ -130,6 +139,7 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
       step: "select_status_or_filler",
       userId: interaction.user.id,
       accountType: selectedType,
+      channelId: channelId, // Simpan channelId di state untuk referensi nanti
     });
     console.log(
       `[DEBUG] Initial state stored for message ${interaction.message.id}:`,
@@ -184,6 +194,14 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
         embeds: [],
         components: [],
       });
+      // --- HAPUS KUNCI JIKA ERROR ---
+      if (channelId) {
+        activeRegistrationChannels.delete(channelId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to unknown account type.`
+        );
+      }
+      // ---
       return;
     }
 
@@ -200,13 +218,35 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
       `[ERROR] Error in handleAccountTypeSelection (interaction: ${interaction.id}, type: ${selectedType}):`,
       error
     );
-    // Jangan coba followUp jika errornya Unknown Interaction, karena interaction sudah hilang
+    // --- HAPUS KUNCI JIKA ERROR ---
+    if (channelId) {
+      activeRegistrationChannels.delete(channelId);
+      console.log(
+        `[DEBUG] Channel ${channelId} unlocked due to error in handleAccountTypeSelection.`
+      );
+    }
+    // ---
     if (error.code !== 10062) {
+      // Jangan coba followUp jika interaction sudah hilang
       try {
-        await interaction.followUp({
-          content: "Error processing selection.",
-          flags: [MessageFlags.Ephemeral],
-        });
+        // Coba edit reply jika memungkinkan, jika tidak followUp
+        if (
+          interaction.message &&
+          !interaction.replied &&
+          !interaction.deferred
+        ) {
+          await interaction.editReply({
+            content: "Error processing selection.",
+            embeds: [],
+            components: [],
+            flags: [MessageFlags.Ephemeral],
+          });
+        } else {
+          await interaction.followUp({
+            content: "Error processing selection.",
+            flags: [MessageFlags.Ephemeral],
+          });
+        }
       } catch (errorReplyError) {
         console.error(
           "[ERROR] Failed to send handleAccountTypeSelection error followup:",
@@ -216,10 +256,11 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
     }
   }
 }
-// --- END OF MOVED FUNCTION ---
 
 // Event Listener: Interaction Created
 client.on(Events.InteractionCreate, async (interaction) => {
+  const channelId = interaction.channel?.id; // Dapatkan channel ID di awal
+
   // Handle Slash Commands
   if (interaction.isChatInputCommand()) {
     const command = interaction.client.commands.get(interaction.commandName);
@@ -239,12 +280,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     try {
-      await command.execute(interaction, appsScriptUrl);
+      // --- PASS activeRegistrationChannels TO COMMAND EXECUTE ---
+      // Pastikan command 'register' menerima argumen ketiga
+      if (interaction.commandName === "register") {
+        await command.execute(
+          interaction,
+          appsScriptUrl,
+          activeRegistrationChannels
+        );
+      } else {
+        // Untuk command lain yang mungkin tidak memerlukan lock management
+        await command.execute(interaction, appsScriptUrl);
+      }
+      // ---
     } catch (error) {
       console.error(
         `[ERROR] Error executing command ${interaction.commandName}:`,
         error
       );
+      // --- HAPUS KUNCI JIKA EKSEKUSI COMMAND GAGAL (terutama untuk register) ---
+      if (interaction.commandName === "register" && channelId) {
+        activeRegistrationChannels.delete(channelId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to command execution error.`
+        );
+      }
+      // ---
       try {
         if (interaction.replied || interaction.deferred) {
           await interaction.followUp({
@@ -277,17 +338,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     );
 
     try {
-      // --- PERBAIKAN: Kondisional deferUpdate ---
-      // Hanya defer jika BUKAN kasus yang akan memanggil showModal
       let shouldDefer = true;
       if (customId === "register_select_filler_status") {
-        shouldDefer = false; // Jangan defer karena akan showModal
+        shouldDefer = false;
         console.log(
           `[DEBUG] Skipping deferUpdate for ${customId} because showModal will be used.`
         );
       }
 
-      if (shouldDefer && !interaction.deferred) {
+      if (shouldDefer && !interaction.deferred && !interaction.replied) {
         try {
           await interaction.deferUpdate();
           console.log(
@@ -298,7 +357,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
             `[ERROR] Failed to defer interaction ${customId} (${interaction.id}):`,
             deferError
           );
-          // Jika defer gagal (misal Unknown Interaction 10062), tidak bisa melanjutkan
+          // Jika defer gagal, proses mungkin terhenti, hapus kunci jika relevan
+          if (customId.startsWith("register_") && channelId) {
+            const currentState = registrationState.get(messageId);
+            if (currentState && currentState.userId === interaction.user.id) {
+              activeRegistrationChannels.delete(channelId);
+              registrationState.delete(messageId);
+              console.log(
+                `[DEBUG] Channel ${channelId} unlocked due to select menu defer error.`
+              );
+            }
+          }
           return;
         }
       }
@@ -326,7 +395,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
             embeds: [],
             components: [],
           });
+          // --- HAPUS KUNCI JIKA STATE TIDAK VALID ---
+          if (currentState && channelId === currentState.channelId) {
+            // Pastikan channel cocok
+            activeRegistrationChannels.delete(channelId);
+            console.log(
+              `[DEBUG] Channel ${channelId} unlocked due to state mismatch (main status).`
+            );
+          }
           registrationState.delete(messageId);
+          // ---
           return;
         }
         currentState.status = selectedValue;
@@ -373,8 +451,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
           console.warn(
             `[WARN] State/User/Step mismatch for ${customId}: ${messageId}`
           );
-          // Karena tidak di-defer, kita perlu reply atau followUp jika interaction sudah di-ack oleh hal lain (seharusnya tidak)
-          // Paling aman adalah reply ephemeral jika memungkinkan
+          // --- HAPUS KUNCI JIKA STATE TIDAK VALID ---
+          if (currentState && channelId === currentState.channelId) {
+            activeRegistrationChannels.delete(channelId);
+            console.log(
+              `[DEBUG] Channel ${channelId} unlocked due to state mismatch (filler status).`
+            );
+          }
+          registrationState.delete(messageId);
+          // ---
           try {
             await interaction.reply({
               content:
@@ -386,7 +471,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
               `[ERROR] Failed to send ephemeral reply for state mismatch (${customId}):`,
               replyError
             );
-            // Coba followUp jika reply gagal (misal sudah di-ack)
             try {
               await interaction.followUp({
                 content: "Sesi registrasi tidak valid...",
@@ -394,7 +478,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
               });
             } catch (e) {}
           }
-          registrationState.delete(messageId);
           return;
         }
         currentState.isFiller = selectedValue === "true";
@@ -403,7 +486,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const modal = new ModalBuilder()
           .setCustomId(
-            `register_farm_modal_${interaction.user.id}_${messageId}` // Pastikan format ini benar
+            `register_farm_modal_${interaction.user.id}_${messageId}`
           )
           .setTitle("Register Farm Account");
         const mainIdInput = new TextInputBuilder()
@@ -417,7 +500,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const actionRow = new ActionRowBuilder().addComponents(mainIdInput);
         modal.addComponents(actionRow);
 
-        // showModal akan mengakui interaksi ini
         await interaction.showModal(modal);
         console.log(
           `[DEBUG] Modal shown for ${customId} (interaction: ${interaction.id}).`
@@ -428,16 +510,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `[ERROR] Error handling select menu ${customId} (${interaction.id}):`,
         error
       );
-      // Penanganan error umum
+      // --- HAPUS KUNCI JIKA ERROR ---
+      const currentState = registrationState.get(messageId);
+      if (currentState && channelId === currentState.channelId) {
+        activeRegistrationChannels.delete(channelId);
+        registrationState.delete(messageId); // Hapus state juga
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to select menu error.`
+        );
+      }
+      // ---
       if (error.code !== 10062 && error.code !== 40060) {
+        // 40060: Interaction has already been acknowledged (misal showModal gagal)
         try {
-          // Jika sudah di-defer, gunakan followUp. Jika tidak (kasus showModal gagal?), coba reply.
-          if (interaction.deferred) {
+          if (interaction.deferred || interaction.replied) {
+            // Jika sudah di-ack
             await interaction.followUp({
               content: "Terjadi error saat memproses pilihan Anda.",
               flags: [MessageFlags.Ephemeral],
             });
-          } else if (!interaction.replied) {
+          } else if (interaction.isRepliable()) {
+            // Jika belum di-ack
             await interaction.reply({
               content: "Terjadi error saat memproses pilihan Anda.",
               flags: [MessageFlags.Ephemeral],
@@ -463,7 +556,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     );
 
     try {
-      if (!interaction.deferred) {
+      if (!interaction.deferred && !interaction.replied) {
         await interaction.deferUpdate();
         console.log(
           `[DEBUG] Button Interaction ${customId} (${interaction.id}) deferred.`
@@ -471,13 +564,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (customId === "register_cancel") {
+        const currentState = registrationState.get(messageId);
         await interaction.editReply({
           content: "❌ Registration process cancelled.",
           embeds: [],
           components: [],
         });
+        // --- HAPUS KUNCI SAAT CANCEL ---
+        if (currentState && channelId === currentState.channelId) {
+          activeRegistrationChannels.delete(channelId);
+          console.log(
+            `[DEBUG] Channel ${channelId} unlocked due to user cancellation.`
+          );
+        }
         registrationState.delete(messageId);
+        // ---
       } else if (customId === "register_back_to_type") {
+        // Hapus state saat kembali, tapi JANGAN hapus kunci karena proses masih berjalan
         registrationState.delete(messageId);
         const initialEmbed = new EmbedBuilder()
           .setColor(0x0099ff)
@@ -506,17 +609,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
         const buttonRow = new ActionRowBuilder().addComponents(cancelButton);
         await interaction.editReply({
-          content: null,
+          content: null, // Hapus konten teks sebelumnya
           embeds: [initialEmbed],
           components: [selectRow, buttonRow],
         });
       }
-      // Add handlers for other buttons if needed
+      // Add handlers for other buttons if needed (e.g., register_confirm_submit is handled in MessageCreate now)
     } catch (error) {
       console.error(
         `[ERROR] Error handling button ${customId} (${interaction.id}):`,
         error
       );
+      // --- HAPUS KUNCI JIKA ERROR TOMBOL ---
+      const currentState = registrationState.get(messageId);
+      if (currentState && channelId === currentState.channelId) {
+        activeRegistrationChannels.delete(channelId);
+        registrationState.delete(messageId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to button error.`
+        );
+      }
+      // ---
       if (error.code !== 10062 && error.code !== 40060) {
         try {
           await interaction.followUp({
@@ -541,8 +654,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       `[DEBUG] Modal Submit Interaction received: ${customId} (interaction: ${interaction.id})`
     );
 
+    // --- Variabel untuk messageId dan userId dari modal ---
+    let messageId;
+    let userIdFromModal;
+
     try {
-      // --- PERBAIKAN: Validasi dan Parsing Custom ID Modal ---
       if (!customId.startsWith("register_farm_modal_")) {
         console.warn(
           `[WARN] Received modal submit with unexpected customId: ${customId}`
@@ -555,7 +671,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const customIdParts = customId.split("_");
-      // Format: register_farm_modal_{userId}_{messageId} -> 5 parts
       if (customIdParts.length !== 5) {
         console.warn(
           `[WARN] Invalid modal customId format received: ${customId}. Parts: ${customIdParts.length}`
@@ -567,8 +682,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const messageId = customIdParts[4];
-      const userIdFromModal = customIdParts[3];
+      messageId = customIdParts[4]; // Ambil messageId dari customId
+      userIdFromModal = customIdParts[3]; // Ambil userId dari customId
 
       if (!/^\d+$/.test(messageId) || !/^\d+$/.test(userIdFromModal)) {
         console.warn(
@@ -589,10 +704,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
           content: "Error processing form: User mismatch. Please start over.",
           flags: [MessageFlags.Ephemeral],
         });
+        // --- HAPUS KUNCI JIKA USER MISMATCH ---
+        const currentState = registrationState.get(messageId);
+        if (currentState && channelId === currentState.channelId) {
+          activeRegistrationChannels.delete(channelId);
+          registrationState.delete(messageId);
+          console.log(
+            `[DEBUG] Channel ${channelId} unlocked due to modal user mismatch.`
+          );
+        }
+        // ---
         return;
       }
 
-      // --- Akui modal submission SETELAH validasi ---
+      // Defer modal submission SETELAH validasi dasar
       await interaction.deferUpdate();
       console.log(
         `[DEBUG] Modal Interaction ${customId} (${interaction.id}) deferred.`
@@ -610,12 +735,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
             currentState
           )})`
         );
+        // --- HAPUS KUNCI JIKA STATE TIDAK VALID ---
+        if (currentState && channelId === currentState.channelId) {
+          activeRegistrationChannels.delete(channelId);
+          console.log(
+            `[DEBUG] Channel ${channelId} unlocked due to modal state mismatch.`
+          );
+        }
+        registrationState.delete(messageId);
+        // ---
         await interaction.followUp({
           content:
             "Registration session invalid/expired. Please start over with /register.",
           flags: [MessageFlags.Ephemeral],
         });
-        registrationState.delete(messageId);
         return;
       }
 
@@ -623,12 +756,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         "register_main_id_input"
       );
       if (!/^\d+$/.test(linkedMainId)) {
+        // Jangan hapus state atau kunci, biarkan user coba lagi atau cancel
         await interaction.followUp({
           content:
             "Error: Invalid Governor ID format. Please enter numbers only.",
           flags: [MessageFlags.Ephemeral],
         });
-        return; // Jangan ubah state
+        return;
       }
 
       currentState.mainId = linkedMainId;
@@ -637,18 +771,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       // Edit pesan interaktif asli
       try {
+        // Coba fetch pesan asli menggunakan messageId dari customId modal
         const originalMessage = await interaction.channel.messages.fetch(
           messageId
         );
         if (!originalMessage) {
+          // Ini seharusnya tidak terjadi jika state valid, tapi sebagai fallback
           console.error(
             `[ERROR] Original message ${messageId} not found after modal submit.`
           );
+          // --- HAPUS KUNCI JIKA PESAN ASLI HILANG ---
+          if (channelId === currentState.channelId) {
+            activeRegistrationChannels.delete(channelId);
+            console.log(
+              `[DEBUG] Channel ${channelId} unlocked due to missing original message after modal.`
+            );
+          }
+          registrationState.delete(messageId);
+          // ---
           await interaction.followUp({
             content: "Error: Could not find the original registration message.",
             flags: [MessageFlags.Ephemeral],
           });
-          registrationState.delete(messageId);
           return;
         }
 
@@ -703,21 +847,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `[ERROR] Failed to edit original message ${messageId} after modal submit:`,
           editError
         );
+        // --- HAPUS KUNCI JIKA EDIT GAGAL ---
+        if (channelId === currentState.channelId) {
+          activeRegistrationChannels.delete(channelId);
+          console.log(
+            `[DEBUG] Channel ${channelId} unlocked due to failed edit after modal.`
+          );
+        }
+        registrationState.delete(messageId);
+        // ---
         await interaction.followUp({
           content:
             "Error updating registration prompt after form submission. Please start over.",
           flags: [MessageFlags.Ephemeral],
         });
-        registrationState.delete(messageId);
       }
     } catch (error) {
       console.error(
         `[ERROR] Error handling modal ${customId} (${interaction.id}):`,
         error
       );
+      // --- HAPUS KUNCI JIKA ERROR MODAL UMUM ---
+      const currentState = registrationState.get(messageId); // Ambil messageId lagi jika perlu
+      if (currentState && channelId === currentState.channelId) {
+        activeRegistrationChannels.delete(channelId);
+        registrationState.delete(messageId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to modal submit error.`
+        );
+      }
+      // ---
       if (error.code !== 10062 && error.code !== 40060) {
         try {
-          // Jika belum di-ack (misal error sebelum defer), coba reply. Jika sudah, followUp.
           if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
               content: "Error processing form submission.",
@@ -742,20 +903,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // Event Listener: Message Created (for screenshot replies)
-// (Kode ini tampaknya sudah cukup baik, tidak ada perubahan signifikan di sini)
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || message.type !== MessageType.Reply) return;
+
   const repliedToMessageId = message.reference?.messageId;
   if (!repliedToMessageId) return;
 
   const currentState = registrationState.get(repliedToMessageId);
-  if (!currentState) return;
-
+  // Pastikan state ada, user cocok, dan langkahnya benar
   if (
+    !currentState ||
     currentState.userId !== message.author.id ||
     currentState.step !== "awaiting_screenshot"
-  )
-    return;
+  ) {
+    return; // Abaikan jika tidak cocok
+  }
+
+  // Dapatkan channelId dari state yang disimpan sebelumnya
+  const channelId = currentState.channelId;
 
   if (message.attachments.size > 0) {
     const attachment = message.attachments.first();
@@ -765,14 +930,32 @@ client.on(Events.MessageCreate, async (message) => {
       );
       await message.react("👍").catch(console.error);
 
-      const processingMessage = await message
-        .reply("⏳ Processing your registration, please wait...")
-        .catch(console.error);
-      if (!processingMessage) {
-        console.error("[ERROR] Failed to send processing message reply.");
-        await message.channel
-          .send(`Processing registration for ${message.author}...`)
+      let processingMessage;
+      try {
+        processingMessage = await message
+          .reply("⏳ Processing your registration, please wait...")
           .catch(console.error);
+        if (!processingMessage) {
+          console.error("[ERROR] Failed to send processing message reply.");
+          // Coba kirim pesan biasa jika reply gagal
+          processingMessage = await message.channel
+            .send(`Processing registration for ${message.author}...`)
+            .catch(console.error);
+        }
+      } catch (replyError) {
+        console.error(
+          "[ERROR] Failed to send initial processing message:",
+          replyError
+        );
+        // Jika gagal mengirim pesan proses, kemungkinan ada masalah channel, hentikan dan hapus kunci
+        if (channelId) {
+          activeRegistrationChannels.delete(channelId);
+          registrationState.delete(repliedToMessageId);
+          console.log(
+            `[DEBUG] Channel ${channelId} unlocked due to processing message failure.`
+          );
+        }
+        return;
       }
 
       let imageBase64 = "";
@@ -803,7 +986,7 @@ client.on(Events.MessageCreate, async (message) => {
               idMainTerhubung: currentState.mainId,
             }),
             imageBase64: imageBase64,
-            attachmentUrl: screenshotUrl,
+            attachmentUrl: screenshotUrl, // Sertakan URL juga
           },
         };
 
@@ -828,6 +1011,7 @@ client.on(Events.MessageCreate, async (message) => {
           result
         );
 
+        // --- PROSES SUKSES ---
         if (result.status === "success" && result.details) {
           const successEmbed = new EmbedBuilder()
             .setColor(0x00ff00)
@@ -843,16 +1027,15 @@ client.on(Events.MessageCreate, async (message) => {
                 value: result.details.type || currentState.accountType || "N/A",
                 inline: true,
               }
+              // ... (Tambahkan field lain sesuai kebutuhan) ...
             )
             .setTimestamp();
-          if (
-            result.details.type === "main" ||
-            currentState.accountType === "main"
-          ) {
+          // Tambahkan detail spesifik berdasarkan tipe akun dari respons GAS
+          if (result.details.type === "main") {
             successEmbed.addFields(
               {
                 name: "Status",
-                value: result.details.status || currentState.status || "N/A",
+                value: result.details.status || "N/A",
                 inline: true,
               },
               {
@@ -866,33 +1049,22 @@ client.on(Events.MessageCreate, async (message) => {
                 inline: true,
               }
             );
-          } else if (
-            result.details.type === "farm" ||
-            currentState.accountType === "farm"
-          ) {
+          } else if (result.details.type === "farm") {
             successEmbed.addFields(
               {
                 name: "Is Filler?",
-                value:
-                  result.details.isFiller !== undefined
-                    ? result.details.isFiller
-                      ? "Yes"
-                      : "No"
-                    : currentState.isFiller
-                    ? "Yes"
-                    : "No",
+                value: result.details.isFiller ? "Yes" : "No",
                 inline: true,
               },
               {
                 name: "Linked Main ID",
-                value:
-                  result.details.linkedMainId || currentState.mainId || "N/A",
+                value: result.details.linkedMainId || "N/A",
                 inline: true,
               }
             );
           }
           if (result.message) successEmbed.setDescription(result.message);
-          successEmbed.setThumbnail(attachment.url);
+          // Jangan tambahkan thumbnail lagi: // successEmbed.setThumbnail(attachment.url);
 
           if (processingMessage && !processingMessage.deleted) {
             await processingMessage
@@ -902,6 +1074,7 @@ client.on(Events.MessageCreate, async (message) => {
               })
               .catch(console.error);
           } else {
+            // Jika pesan proses hilang, kirim pesan baru
             await message.channel
               .send({
                 content: `${message.author}, your registration is complete!`,
@@ -910,6 +1083,7 @@ client.on(Events.MessageCreate, async (message) => {
               .catch(console.error);
           }
 
+          // Hapus komponen dari pesan interaksi asli
           try {
             const originalInteractionMessage =
               await message.channel.messages.fetch(repliedToMessageId);
@@ -918,21 +1092,37 @@ client.on(Events.MessageCreate, async (message) => {
               originalInteractionMessage.components.length > 0
             ) {
               await originalInteractionMessage.edit({
-                components: [],
+                components: [], // Hapus semua tombol/menu
               });
               console.log(
                 `[DEBUG] Components removed from original message ${repliedToMessageId}`
               );
             }
           } catch (editError) {
-            console.warn(
-              `[WARN] Could not remove components from original message ${repliedToMessageId}: ${editError.message}`
+            // Abaikan jika pesan asli tidak ditemukan atau tidak bisa diedit
+            if (editError.code !== 10008) {
+              // Jangan log jika Unknown Message
+              console.warn(
+                `[WARN] Could not remove components from original message ${repliedToMessageId}: ${editError.message}`
+              );
+            }
+          }
+
+          // --- HAPUS STATE DAN KUNCI SETELAH SUKSES ---
+          registrationState.delete(repliedToMessageId);
+          if (channelId) {
+            activeRegistrationChannels.delete(channelId);
+            console.log(
+              `[INFO] Registration state cleared and channel ${channelId} unlocked successfully for message ${repliedToMessageId}`
+            );
+          } else {
+            console.log(
+              `[INFO] Registration state cleared successfully for message ${repliedToMessageId} (channelId not found in state).`
             );
           }
-          registrationState.delete(repliedToMessageId);
-          console.log(
-            `[INFO] Registration state cleared successfully for message ${repliedToMessageId}`
-          );
+          // ---
+
+          // --- PROSES GAGAL (dari Apps Script) ---
         } else {
           console.error(
             `[ERROR] Registration failed via Apps Script for ${repliedToMessageId}. Response:`,
@@ -946,7 +1136,21 @@ client.on(Events.MessageCreate, async (message) => {
           } else {
             await message.reply(failMessage).catch(console.error);
           }
+          // --- HAPUS STATE DAN KUNCI SETELAH GAGAL DARI GAS ---
+          registrationState.delete(repliedToMessageId);
+          if (channelId) {
+            activeRegistrationChannels.delete(channelId);
+            console.log(
+              `[INFO] Registration state cleared and channel ${channelId} unlocked due to Apps Script failure for message ${repliedToMessageId}`
+            );
+          } else {
+            console.log(
+              `[INFO] Registration state cleared due to Apps Script failure for message ${repliedToMessageId} (channelId not found in state).`
+            );
+          }
+          // ---
         }
+        // --- ERROR INTERNAL SAAT PROSES ---
       } catch (error) {
         console.error(
           `[ERROR] Error during final registration processing for ${repliedToMessageId}:`,
@@ -956,14 +1160,25 @@ client.on(Events.MessageCreate, async (message) => {
         if (processingMessage && !processingMessage.deleted) {
           await processingMessage.edit(errorMessage).catch(console.error);
         } else {
+          // Coba reply ke pesan user jika pesan proses gagal/hilang
           await message.reply(errorMessage).catch(console.error);
         }
+        // --- HAPUS STATE DAN KUNCI SETELAH ERROR INTERNAL ---
         registrationState.delete(repliedToMessageId);
-        console.log(
-          `[INFO] Registration state cleared due to error for message ${repliedToMessageId}`
-        );
+        if (channelId) {
+          activeRegistrationChannels.delete(channelId);
+          console.log(
+            `[INFO] Registration state cleared and channel ${channelId} unlocked due to internal error for message ${repliedToMessageId}`
+          );
+        } else {
+          console.log(
+            `[INFO] Registration state cleared due to internal error for message ${repliedToMessageId} (channelId not found in state).`
+          );
+        }
+        // ---
       }
     } else {
+      // Jika bukan gambar, minta lagi tanpa menghentikan proses/menghapus kunci
       await message
         .reply("⚠️ Please reply with an image file (screenshot).")
         .catch(console.error);
