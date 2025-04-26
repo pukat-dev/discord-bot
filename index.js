@@ -1,4 +1,4 @@
-// index.js (Complete English Version with Fixes v5 - Flags & Central Handling)
+// index.js (Complete English Version with Fixes v6 - Fixed Cancel Lock)
 require("dotenv").config(); // Ensure environment variables/secrets are loaded
 const {
   Client,
@@ -25,7 +25,6 @@ const fetch = require("node-fetch"); // Ensure node-fetch@2 is installed if usin
 const registrationState = new Map();
 // --- CHANNEL LOCK MANAGEMENT ---
 // Define the Set HERE to be managed centrally by index.js
-// This Set will be passed to the register command.
 const activeRegistrationChannels = new Set();
 // ---
 
@@ -112,7 +111,8 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
           deferError
         );
         // --- UNLOCK ON ERROR ---
-        if (channelId) {
+        if (channelId && activeRegistrationChannels.has(channelId)) {
+          // Check before delete
           activeRegistrationChannels.delete(channelId);
           console.log(
             `[DEBUG] Channel ${channelId} unlocked due to handleAccountTypeSelection defer error.`
@@ -199,7 +199,8 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
         components: [],
       });
       // --- UNLOCK ON ERROR ---
-      if (channelId) {
+      if (channelId && activeRegistrationChannels.has(channelId)) {
+        // Check before delete
         activeRegistrationChannels.delete(channelId);
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to unknown account type.`
@@ -224,7 +225,8 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
       error
     );
     // --- UNLOCK ON ERROR ---
-    if (channelId) {
+    if (channelId && activeRegistrationChannels.has(channelId)) {
+      // Check before delete
       activeRegistrationChannels.delete(channelId);
       console.log(
         `[DEBUG] Channel ${channelId} unlocked due to error in handleAccountTypeSelection.`
@@ -240,7 +242,7 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
             content: "An error occurred while processing your selection.", // English
             embeds: [],
             components: [],
-            flags: [MessageFlags.Ephemeral], // Use flags
+            // flags: [MessageFlags.Ephemeral] // Keep public if original was public
           })
           .catch((e) =>
             console.error(
@@ -253,7 +255,7 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
         await interaction
           .followUp({
             content: "An error occurred while processing your selection.", // English
-            flags: [MessageFlags.Ephemeral], // Use flags
+            flags: [MessageFlags.Ephemeral], // Use flags for followup
           })
           .catch((e) =>
             console.error(
@@ -314,7 +316,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         error
       );
       // --- UNLOCK CHANNEL IF COMMAND EXECUTION FAILS (especially for register) ---
-      // Unlock is handled here using the central Set
       if (interaction.commandName === "register" && channelId) {
         // Check if lock exists before deleting
         if (activeRegistrationChannels.has(channelId)) {
@@ -379,7 +380,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           deferError
         );
         // If defer fails (e.g., interaction already acknowledged elsewhere or timed out), stop processing
-        // Unlock channel if relevant to registration and defer failed critically
         if (
           customId.startsWith("register_") &&
           channelId &&
@@ -622,15 +622,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
           components: [],
         });
         // --- UNLOCK CHANNEL ON CANCEL ---
+        // Check if state exists and channel matches before unlocking
         if (currentState && channelId === currentState.channelId) {
+          // Check if the lock actually exists before attempting to delete
           if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // Use central Set
+            activeRegistrationChannels.delete(channelId); // <-- THE FIX: Actually delete the lock
             console.log(
-              `[DEBUG] Channel ${channelId} unlocked due to user cancellation.`
+              `[DEBUG] Channel ${channelId} unlocked due to user cancellation.` // Log is now accurate
+            );
+          } else {
+            console.log(
+              `[DEBUG] Channel ${channelId} was already unlocked when cancel was processed.`
             );
           }
+        } else {
+          console.log(
+            `[DEBUG] State not found or channel mismatch for cancel button (Message ID: ${messageId}). Lock not removed.`
+          );
         }
-        registrationState.delete(messageId); // Clean state
+        // Always clean up state map entry for this message ID on cancel
+        registrationState.delete(messageId);
         // ---
       } else if (customId === "register_back_to_type") {
         // Delete state when going back, but DO NOT unlock channel yet
@@ -1124,7 +1135,7 @@ client.on(Events.MessageCreate, async (message) => {
             successEmbed.addFields(
               {
                 name: "Status", // English
-                value: result.details.status || "N/A",
+                value: result.details.status || "N/A", // Use 'status' from GAS details
                 inline: true,
               },
               {
@@ -1142,12 +1153,12 @@ client.on(Events.MessageCreate, async (message) => {
             successEmbed.addFields(
               {
                 name: "Is Filler?", // English
-                value: result.details.isFiller ? "Yes" : "No", // English
+                value: result.details.isFiller ? "Yes" : "No", // Use 'isFiller' from GAS details
                 inline: true,
               },
               {
                 name: "Linked Main ID", // English
-                value: result.details.linkedMainId || "N/A",
+                value: result.details.linkedMainId || "N/A", // Use 'linkedMainId' from GAS details
                 inline: true,
               }
             );
