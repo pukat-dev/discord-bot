@@ -20,138 +20,129 @@ const fetch = require("node-fetch"); // Ensure node-fetch v2 is installed (npm i
 // REMOVED: const activeRegistrationChannels = new Set();
 // The Set is now managed centrally in index.js and passed as an argument.
 
-// Set global timeout (5 minutes in milliseconds)
+// Set global timeout (5 minutes in milliseconds) - Adjust as needed
 const MESSAGE_AWAIT_TIMEOUT = 300000; // 300,000 ms = 5 minutes
 const MODAL_AWAIT_TIMEOUT = 240000; // Timeout for modal submission (e.g., 4 minutes)
 
 /**
  * Displays the registration data confirmation embed to the user.
- * (Matches original structure, translated)
- * @param {import('discord.js').ChatInputCommandInteraction | import('discord.js').Interaction} interaction - The interaction to edit or follow up on.
- * @param {object} data - The object containing collected registration data.
- * @param {boolean} [farmNeedsModalId=false] - Original flag, kept for consistency.
+ * @param {import('discord.js').ChatInputCommandInteraction | import('discord.js').Interaction} interaction
+ * @param {object} data
+ * @param {boolean} [farmNeedsModalId=false]
  */
 async function showConfirmationPublic(
-  interaction, // Can be original or component interaction
+  interaction,
   data,
   farmNeedsModalId = false
 ) {
-  // Create the confirmation embed
+  // Create the confirmation embed in English
   const confirmEmbed = new EmbedBuilder()
-    .setColor(0xffff00) // Yellow color
-    .setTitle("🔍 Confirm Registration Details") // Original title
+    .setColor(0xffff00)
+    .setTitle("🔍 Confirm Registration Details") // English Title
     .addFields({
-      name: "Account Type", // Original field name
+      name: "Account Type", // English Field
       value: data.tipeAkun
         ? data.tipeAkun === "main"
           ? "Main"
           : "Farm"
-        : "N/A", // Translate value
+        : "N/A",
       inline: true,
     })
     .setTimestamp();
 
-  // Add specific fields based on account type (matches original structure)
+  // Add specific fields based on account type
   if (data.tipeAkun === "main") {
     confirmEmbed.addFields({
-      name: "Status", // Original field name
+      name: "Status",
       value: data.statusMain || "N/A",
       inline: true,
     });
   } else {
-    // If account type is 'farm'
     confirmEmbed.addFields({
-      name: "Is Filler?", // Original field name
-      value: data.isFiller === null ? "N/A" : data.isFiller ? "Yes" : "No", // Handle null case
+      name: "Is Filler?", // English Field
+      value: data.isFiller === null ? "N/A" : data.isFiller ? "Yes" : "No", // English Value
       inline: true,
     });
-    // Display the linked Main ID (matches original logic)
+    // Display the linked Main ID
     if (farmNeedsModalId) {
-      // This flag might not be relevant anymore if modal always follows filler selection
       confirmEmbed.addFields({
-        name: "Linked Main ID",
-        value: "(Will be collected via modal)", // Original text
+        name: "Linked Main ID", // English Field
+        value: "(Will be collected via modal)", // English Text
         inline: true,
       });
     } else {
       confirmEmbed.addFields({
-        name: "Linked Main ID", // Original field name
+        name: "Linked Main ID", // English Field
         value: data.idMainTerhubung || "N/A",
         inline: true,
       });
     }
   }
 
-  // Add screenshot information if available (matches original structure)
+  // Add screenshot information if available
   if (data.attachment) {
     confirmEmbed.addFields({
-      name: "Screenshot", // Original field name
-      value: `[View Attachment](${data.attachment.url})`, // Original text
+      name: "Screenshot",
+      value: `[View Attachment](${data.attachment.url})`, // English Text
     });
     confirmEmbed.setThumbnail(data.attachment.url);
   } else {
     confirmEmbed.addFields({
       name: "Screenshot",
-      value: "Not provided yet.", // Original text
+      value: "Not provided yet.", // English Text
     });
   }
 
-  // Create confirmation buttons (matches original structure)
+  // Create confirmation buttons in English
   const submitButton = new ButtonBuilder()
     .setCustomId("register_confirm_submit")
-    .setLabel("Submit Registration") // Original label
+    .setLabel("Submit Registration") // English Label
     .setStyle(ButtonStyle.Success);
   const backButton = new ButtonBuilder()
-    .setCustomId("register_confirm_back") // Ensure this ID is handled if needed
-    .setLabel("Start Over") // Original label
+    .setCustomId("register_confirm_back")
+    .setLabel("Start Over") // English Label
     .setStyle(ButtonStyle.Secondary);
   const cancelButton = new ButtonBuilder()
     .setCustomId("register_cancel")
-    .setLabel("Cancel") // Original label
+    .setLabel("Cancel") // English Label
     .setStyle(ButtonStyle.Danger);
 
-  // Create an action row for the buttons
   const confirmRow = new ActionRowBuilder().addComponents(
     submitButton,
-    backButton, // Re-added Start Over button
+    backButton,
     cancelButton
   );
 
   // Send or edit the message with the confirmation embed and buttons
   try {
-    // Use editReply on the interaction that led to this confirmation
-    // Check if the interaction is still valid and can be replied to or edited
+    const confirmationMessage =
+      "Please review your registration details below and confirm:"; // English Text
     if (interaction.replied || interaction.deferred) {
-      // If already replied/deferred (e.g., from deferUpdate), try editing the original message if possible
       if (interaction.message) {
         await interaction.message.edit({
-          content: "Please review your registration details below and confirm:",
+          content: confirmationMessage,
           embeds: [confirmEmbed],
           components: [confirmRow],
         });
       } else {
-        // Fallback: Follow up if message reference isn't available
         await interaction.followUp({
-          content: "Please review your registration details below and confirm:",
+          content: confirmationMessage,
           embeds: [confirmEmbed],
           components: [confirmRow],
-          ephemeral: false, // Make it public if following up
+          ephemeral: false,
         });
       }
     } else if (interaction.isRepliable()) {
-      // If not replied/deferred yet, use editReply (common case for initial command)
       await interaction.editReply({
-        content: "Please review your registration details below and confirm:", // Original text
+        content: confirmationMessage,
         embeds: [confirmEmbed],
-        components: [confirmRow], // Add the buttons
+        components: [confirmRow],
       });
     } else {
       console.warn(
         `[WARN] Interaction ${interaction.id} is not repliable, deferred, or replied.`
       );
-      // Cannot update the interaction directly
     }
-
     console.log(
       `[DEBUG] ${new Date().toISOString()} - Public confirmation message shown/edited in channel ${
         interaction.channel?.id
@@ -164,15 +155,15 @@ async function showConfirmationPublic(
       }:`,
       editError
     );
-    // Simple text error handling, matching original style but removing components
+    // Simple text error handling in English
+    const errorMessage = "Error displaying confirmation. Please try again."; // English Text
     try {
-      // Attempt to edit the original message if possible
       if (interaction.message && !interaction.message.deleted) {
         await interaction.message
           .edit({
-            content: "Error displaying confirmation. Please try again.", // Original error text
+            content: errorMessage,
             embeds: [],
-            components: [], // Remove buttons on error
+            components: [],
           })
           .catch((e) =>
             console.error("Error editing message on confirmation error:", e)
@@ -181,15 +172,13 @@ async function showConfirmationPublic(
         interaction.isRepliable() &&
         !(interaction.replied || interaction.deferred)
       ) {
-        // If interaction is fresh and hasn't been replied to
         await interaction.reply({
-          content: "Error displaying confirmation.",
+          content: errorMessage,
           ephemeral: true,
         });
       } else if (interaction.isRepliable()) {
-        // If interaction was replied/deferred, follow up
         await interaction.followUp({
-          content: "Error displaying confirmation.",
+          content: errorMessage,
           ephemeral: true,
         });
       }
@@ -201,20 +190,18 @@ async function showConfirmationPublic(
 
 // Export the command module
 module.exports = {
-  // Slash Command definition (matches original structure)
+  // Command definition in English
   data: new SlashCommandBuilder().setName("register").setDescription(
-    "Press Enter or Send to start the interactive registration." // Original description
+    "Press Enter or Send to start the interactive registration." // English description
   ),
 
   /**
    * The main function executed when the /register command is run.
-   * @param {import('discord.js').ChatInputCommandInteraction} interaction - The command interaction.
-   * @param {string} appsScriptUrl - Your Google Apps Script Web App URL.
-   * @param {Set<string>} activeRegistrationChannels - The Set managing active channel locks (passed from index.js).
+   * @param {import('discord.js').ChatInputCommandInteraction} interaction
+   * @param {string} appsScriptUrl
+   * @param {Set<string>} activeRegistrationChannels
    */
   async execute(interaction, appsScriptUrl, activeRegistrationChannels) {
-    // <-- Added 3rd argument
-    // 'interaction' here is the original ChatInputCommandInteraction
     const channelId = interaction.channel.id;
     const userId = interaction.user.id;
     const username = interaction.user.username;
@@ -223,37 +210,28 @@ module.exports = {
       `[DEBUG] ${new Date().toISOString()} - /register invoked by ${userId} (${username}) in channel ${channelId}`
     );
 
-    // --- CHANNEL LOCK CHECK ---
-    // Check the Set passed from index.js
+    // Channel lock check with English message
     if (activeRegistrationChannels.has(channelId)) {
       await interaction.reply({
         content:
-          "⚠️ Sorry, another registration process is already active in this channel. Please wait until it's completed or cancelled.", // Lock message in English
+          "⚠️ Sorry, another registration process is already active in this channel. Please wait until it's completed or cancelled.", // English Lock message
         ephemeral: true,
       });
       console.log(
         `[WARN] ${new Date().toISOString()} - /register blocked in channel ${channelId} due to active registration (checked shared Set).`
       );
-      return; // Stop execution if channel is locked
+      return;
     }
-    // --- END CHANNEL LOCK CHECK ---
 
-    // If not locked, add the channel to the Set (lock the channel)
-    // Add to the Set passed from index.js
     activeRegistrationChannels.add(channelId);
     console.log(
       `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} locked for registration (added to shared Set).`
     );
 
-    // NOTE: The 'finally' block for releasing the lock is REMOVED here.
-    // Lock release MUST be handled in index.js where the flow concludes
-    // or encounters an error before passing control back.
     try {
-      // --- START MAIN LOGIC ---
-
-      // Defer reply (PUBLIC) to allow time for subsequent processing
+      // Defer reply
       try {
-        await interaction.deferReply({ ephemeral: false }); // Public
+        await interaction.deferReply({ ephemeral: false });
         console.log(
           `[DEBUG] ${new Date().toISOString()} - Interaction publicly deferred in channel ${channelId}.`
         );
@@ -262,53 +240,52 @@ module.exports = {
           `[ERROR] ${new Date().toISOString()} - Error deferring public reply in channel ${channelId}:`,
           deferError
         );
-        // --- KUNCI DIHAPUS JIKA DEFER GAGAL ---
-        // Unlock the channel using the passed Set
         activeRegistrationChannels.delete(channelId);
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to defer error (in register.js).`
         );
-        // ---
         if (!interaction.replied && !interaction.deferred) {
           await interaction
             .reply({
               content:
-                "❌ Failed to start the registration process due to an internal error.", // Simple error text
+                "❌ Failed to start the registration process due to an internal error.", // English Error text
               ephemeral: true,
             })
             .catch((e) =>
               console.error("Error sending initial defer error reply:", e)
             );
         }
-        return; // Stop execution
+        return;
       }
 
-      // --- STEP 1: ACCOUNT TYPE SELECTION (Matches original structure) ---
+      // Initial embed in English
       const initialEmbed = new EmbedBuilder()
         .setColor(0x0099ff)
-        .setTitle("📝 New Account Registration") // Original title
+        .setTitle("📝 New Account Registration") // English Title
         .setDescription(
-          "Please select the type of account you want to register:" // Original description
+          "Please select the type of account you want to register:" // English Description
         )
         .setTimestamp();
 
+      // Account type select menu in English
       const accountTypeSelect = new StringSelectMenuBuilder()
-        .setCustomId("register_select_account_type") // This ID will be handled by index.js InteractionCreate
-        .setPlaceholder("Select account type...") // Original placeholder
+        .setCustomId("register_select_account_type")
+        .setPlaceholder("Select account type...") // English Placeholder
         .addOptions(
           new StringSelectMenuOptionBuilder()
-            .setLabel("Main Account") // Original label
-            .setDescription("Register your primary account.") // Original description
+            .setLabel("Main Account") // English Label
+            .setDescription("Register your primary account.") // English Description
             .setValue("main"),
           new StringSelectMenuOptionBuilder()
-            .setLabel("Farm Account") // Original label
-            .setDescription("Register a farm account.") // Original description
+            .setLabel("Farm Account") // English Label
+            .setDescription("Register a farm account.") // English Description
             .setValue("farm")
         );
 
+      // Cancel button in English
       const cancelButtonInitial = new ButtonBuilder()
-        .setCustomId("register_cancel") // This ID will be handled by index.js InteractionCreate
-        .setLabel("Cancel") // Original label
+        .setCustomId("register_cancel")
+        .setLabel("Cancel") // English Label
         .setStyle(ButtonStyle.Danger);
 
       const selectRow = new ActionRowBuilder().addComponents(accountTypeSelect);
@@ -316,13 +293,13 @@ module.exports = {
         cancelButtonInitial
       );
 
-      // Send the initial message
+      // Send initial message
       let initialReply;
       try {
         initialReply = await interaction.editReply({
           embeds: [initialEmbed],
-          components: [selectRow, buttonRowInitial], // Show menu and cancel button
-          fetchReply: true, // Important to get the message object for the collector
+          components: [selectRow, buttonRowInitial],
+          fetchReply: true,
         });
         console.log(
           `[DEBUG] ${new Date().toISOString()} - Initial public registration message sent in channel ${channelId}. Message ID: ${
@@ -334,18 +311,15 @@ module.exports = {
           `[ERROR] ${new Date().toISOString()} - Failed to send initial registration message in channel ${channelId}:`,
           editErr
         );
-        // --- KUNCI DIHAPUS JIKA EDITREPLY AWAL GAGAL ---
-        // Unlock the channel using the passed Set
         activeRegistrationChannels.delete(channelId);
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to initial editReply error (in register.js).`
         );
-        // ---
         if (interaction.editable) {
           await interaction
             .editReply({
               content:
-                "An error occurred setting up registration. Please try again.", // Original error text
+                "An error occurred while setting up registration. Please try again.", // English Error text
               embeds: [],
               components: [],
             })
@@ -353,23 +327,21 @@ module.exports = {
               console.error("Error sending initial setup error message:", e)
             );
         }
-        return; // Stop execution
+        return;
       }
 
-      // Interaction filter: only from the user who initiated the command
+      // Interaction filter
       const filter = (i) => i.user.id === userId;
 
-      // Create a collector primarily for timeout detection on the initial message
-      // Note: Actual interaction handling is now primarily in index.js
+      // Collector setup
       const collector = initialReply.createMessageComponentCollector({
         filter,
-        time: MESSAGE_AWAIT_TIMEOUT * 2, // Long timeout, actual step timeouts handled in index.js
-        dispose: true, // Try to clean up listeners
+        time: MESSAGE_AWAIT_TIMEOUT,
+        dispose: true,
       });
 
-      // --- COLLECTOR LOGIC (Minimal, mostly for logging/timeout) ---
+      // Collector collect event (logging only)
       collector.on("collect", async (i) => {
-        // Log collection but expect index.js to handle the interaction logic
         console.log(
           `[DEBUG] ${new Date().toISOString()} - Collector (in register.js) observed interaction: ${
             i.customId
@@ -377,47 +349,76 @@ module.exports = {
             initialReply.id
           }. Expecting index.js to handle.`
         );
-        // No UI updates or state changes here
       });
 
-      // --- COLLECTOR END LOGIC ---
+      // Collector end event (handles timeout)
       collector.on("end", (collected, reason) => {
+        const messageId = initialReply.id;
         console.log(
-          `[DEBUG] ${new Date().toISOString()} - Registration collector (in register.js) for message ${
-            initialReply.id
-          } ended. Reason: ${reason}.`
+          `[DEBUG] ${new Date().toISOString()} - Registration collector (in register.js) for message ${messageId} ended. Reason: ${reason}.`
         );
 
-        // --- PENGHAPUSAN KUNCI DIHAPUS DARI SINI ---
-        // Lock release is now handled by index.js upon completion, cancellation, or error.
-        // activeRegistrationChannels.delete(channelId); // DO NOT UNLOCK HERE
-        // console.log( `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked via collector end.` ); // Incorrect log
+        // Handle Timeout Explicitly
+        if (reason === "time") {
+          console.log(
+            `[INFO] Registration process timed out for message ${messageId} in channel ${channelId}.`
+          );
 
-        // Optional: Check if the message still exists and might need cleanup if timeout occurred
-        // But rely on index.js to handle the primary cleanup and lock release.
-        interaction.channel.messages
-          .fetch(initialReply.id)
-          .then((finalMessageState) => {
-            if (
-              reason === "time" &&
-              finalMessageState?.components?.length > 0
-            ) {
-              console.log(
-                `[WARN] Collector timed out for message ${initialReply.id}. index.js should handle final state and lock.`
-              );
-              // Optionally edit message here as a fallback, but index.js is preferred
-              // finalMessageState.edit({ content: "Registration timed out.", embeds: [], components: [] }).catch(e => {});
-            }
-          })
-          .catch((err) => {
-            if (err.code !== 10008) {
-              // Ignore "Unknown Message"
-              console.error(
-                `[ERROR] Failed to fetch message ${initialReply.id} at collector end:`,
-                err
-              );
-            }
-          });
+          // Unlock channel if still locked
+          if (activeRegistrationChannels.has(channelId)) {
+            activeRegistrationChannels.delete(channelId);
+            console.log(
+              `[DEBUG] Channel ${channelId} unlocked due to timeout (collector end in register.js).`
+            );
+          } else {
+            console.log(
+              `[DEBUG] Channel ${channelId} was already unlocked when collector timed out (message ${messageId}).`
+            );
+          }
+
+          // Edit the original message to indicate timeout in English
+          interaction.channel.messages
+            .fetch(messageId)
+            .then(async (finalMessageState) => {
+              if (
+                finalMessageState &&
+                finalMessageState.components.length > 0
+              ) {
+                await finalMessageState
+                  .edit({
+                    content: `⏰ This registration has expired due to inactivity. Please start over using /register.`, // English timeout message
+                    embeds: [],
+                    components: [],
+                  })
+                  .catch((e) =>
+                    console.error(
+                      `[ERROR] Failed to edit message ${messageId} on timeout:`,
+                      e
+                    )
+                  );
+                console.log(
+                  `[DEBUG] Edited message ${messageId} to show timeout.`
+                );
+              } else {
+                console.log(
+                  `[DEBUG] Message ${messageId} either deleted or already completed/cancelled. No timeout edit needed.`
+                );
+              }
+            })
+            .catch((err) => {
+              if (err.code === 10008) {
+                // Unknown Message
+                console.log(
+                  `[DEBUG] Original message ${messageId} not found for timeout edit (likely deleted).`
+                );
+              } else {
+                console.error(
+                  `[ERROR] Failed to fetch message ${messageId} at collector end for timeout edit:`,
+                  err
+                );
+              }
+            });
+        }
       }); // End collector.on('end')
     } catch (error) {
       // Handle major errors during setup
@@ -425,24 +426,23 @@ module.exports = {
         `[ERROR] ${new Date().toISOString()} - Major error during /register command execution in channel ${channelId}:`,
         error
       );
-      // --- KUNCI DIHAPUS JIKA TERJADI ERROR BESAR ---
-      // Unlock the channel using the passed Set
       activeRegistrationChannels.delete(channelId);
       console.log(
         `[DEBUG] ${new Date().toISOString()} - Channel ${channelId} unlocked due to major error (in register.js).`
       );
-      // ---
+      // Send error feedback in English
       try {
+        const majorErrorMessage =
+          "An internal error occurred during the registration setup. Please try again later."; // English Error text
         if (interaction.editable) {
           await interaction.editReply({
-            content:
-              "An internal error occurred during the registration setup. Please try again later.",
+            content: majorErrorMessage,
             embeds: [],
             components: [],
           });
         } else if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({
-            content: "❌ Failed to start the registration process.",
+            content: "❌ Failed to start the registration process.", // English Error text
             ephemeral: true,
           });
         }
