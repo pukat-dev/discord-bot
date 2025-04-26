@@ -329,13 +329,13 @@ module.exports = {
           // --- Handle Modal Submit (Farm ID) ---
           // This is now handled by awaitModalSubmit below, so this block can be removed or commented out
           /*
-                    if (
-                        i.type === InteractionType.ModalSubmit &&
-                        i.customId === "register_farm_modal"
-                    ) {
-                       // ... logic moved ...
-                    }
-                    */
+                      if (
+                          i.type === InteractionType.ModalSubmit &&
+                          i.customId === "register_farm_modal"
+                      ) {
+                         // ... logic moved ...
+                      }
+                      */
 
           // --- Defer non-modal/non-showModal interactions ---
           if (
