@@ -101,7 +101,7 @@ module.exports = {
 
       // Mengonversi gambar ke Base64
       await interaction.editReply({
-        content: "⏳ Processing your submission... Converting image...",
+        content: "⏳ Processing your submission... please wait a minute...",
       });
       let proofImageBase64;
       try {
@@ -126,7 +126,7 @@ module.exports = {
       };
 
       await interaction.editReply({
-        content: "⏳ Submitting data to the backend...",
+        content: "⏳ Data is processing, almost done...",
       });
 
       // Mengirim request ke Google Apps Script
