@@ -189,8 +189,8 @@ module.exports = {
       if (result.status === "success" && result.details) {
         const details = result.details;
         const embed = new EmbedBuilder()
-          .setColor(details.note ? 0xffcc00 : 0x00ff00) // Kuning jika ada catatan, hijau jika tidak
-          .setTitle("✅ Pre-KvK Submission Processed!")
+          .setColor(details.note ? 0x00ff00 : 0x00ff00) // Kuning jika ada catatan, hijau jika tidak
+          .setTitle("✅ Pre-KvK Submission Successed!")
           .setDescription(
             result.message || "Your Pre-KvK data has been processed."
           )
@@ -304,7 +304,7 @@ module.exports = {
         // Menambahkan catatan dari backend jika ada
         if (details.note) {
           embed.addFields({
-            name: "⚠️ Note",
+            name: "Note:",
             value: details.note,
             inline: false,
           });
