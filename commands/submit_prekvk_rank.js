@@ -1,13 +1,15 @@
-// commands/submit_prekvk.js (V3 Flow - English)
+// commands/submit_prekvk.js (V3 Flow - Screenshot Only)
+// File ini menangani command /submit_prekvk di Discord
 
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
-const fetch = require("node-fetch"); // Ensure node-fetch@2 is installed
+// Pastikan Anda sudah menginstal node-fetch versi 2: npm install node-fetch@2
+const fetch = require("node-fetch");
 
 /**
- * Helper function to convert an image URL to a Base64 encoded string.
- * @param {string} url - The URL of the image to convert.
- * @returns {Promise<string>} A promise that resolves with the Base64 encoded image string.
- * @throws {Error} If fetching or processing the image fails.
+ * Fungsi helper untuk mengubah URL gambar menjadi string Base64.
+ * @param {string} url - URL gambar yang akan dikonversi.
+ * @returns {Promise<string>} Promise yang resolve dengan string gambar Base64.
+ * @throws {Error} Jika gagal mengambil atau memproses gambar.
  */
 async function imageToBase64(url) {
   const response = await fetch(url);
@@ -21,41 +23,36 @@ async function imageToBase64(url) {
 }
 
 module.exports = {
+  // Mendefinisikan struktur command slash
   data: new SlashCommandBuilder()
     .setName("submit_prekvk")
-    .setDescription(
-      "Submit Pre-KvK data (ID, Proof Screenshot, and Your Score)."
-    )
-    // --- ALL OPTIONS ARE REQUIRED ---
-    .addStringOption((option) =>
-      option
-        .setName("governor_id")
-        .setDescription("Enter your Governor ID (7-10 digits).")
-        .setRequired(true)
-        .setMinLength(7)
-        .setMaxLength(10)
+    // Deskripsi command diubah sedikit
+    .setDescription("Submit Pre-KvK data (ID and Proof Screenshot).")
+    // --- HANYA OPSI ID DAN SCREENSHOT ---
+    .addStringOption(
+      (option) =>
+        option
+          .setName("governor_id")
+          .setDescription("Enter your Governor ID (7-10 digits).") // Deskripsi tetap Inggris sesuai file asli
+          .setRequired(true) // Wajib diisi
+          .setMinLength(7) // Minimal 7 digit
+          .setMaxLength(10) // Maksimal 10 digit
     )
     .addAttachmentOption(
       (option) =>
         option
           .setName("proof_screenshot")
           .setDescription(
-            "Upload Screenshot: Rank Mail (if received) OR Score Page."
+            "Upload Screenshot: Rank Mail (if received) OR Score Page." // Deskripsi tetap Inggris
           )
-          .setRequired(true) // Always required
-    )
-    .addIntegerOption(
-      (option) =>
-        option
-          .setName("input_score")
-          .setDescription("Enter your total Pre-KvK score (numbers only).")
-          .setRequired(true) // Always required
-          .setMinValue(1) // Minimum score of 1
+          .setRequired(true) // Wajib diisi
     ),
+  // --- Opsi input_score sudah DIHAPUS ---
 
+  // Fungsi yang akan dieksekusi saat command dijalankan
   async execute(interaction, appsScriptUrl) {
-    // Check if the command is used in the allowed channel
-    const allowedChannelId = process.env.PREKVK_CHANNEL_ID; // Ensure this ID is correct in your .env file
+    // Memeriksa apakah command digunakan di channel yang diizinkan (jika dikonfigurasi)
+    const allowedChannelId = process.env.PREKVK_CHANNEL_ID; // Ambil ID channel dari environment variable
     if (allowedChannelId && interaction.channelId !== allowedChannelId) {
       const allowedChannel =
         interaction.guild?.channels.cache.get(allowedChannelId);
@@ -67,10 +64,10 @@ module.exports = {
       );
       return interaction.reply({
         content: `❌ This command can only be used in ${channelMention}.`,
-        ephemeral: true,
+        ephemeral: true, // Pesan hanya terlihat oleh pengguna
       });
     }
-    // Check if the Apps Script URL is configured
+    // Memeriksa apakah URL Google Apps Script sudah dikonfigurasi
     if (!appsScriptUrl) {
       console.error("[ERROR] APPS_SCRIPT_WEB_APP_URL is not configured.");
       return interaction.reply({
@@ -79,35 +76,30 @@ module.exports = {
       });
     }
 
-    // Defer the reply to prevent timeout
+    // Menunda balasan untuk memberi waktu pemrosesan
     await interaction.deferReply();
 
     try {
-      // Get all options (all are required in this flow)
+      // Mengambil opsi yang diberikan pengguna (inputScore dihapus)
       const governorIdInput = interaction.options.getString("governor_id");
       const proofAttachment =
         interaction.options.getAttachment("proof_screenshot");
-      const inputScore = interaction.options.getInteger("input_score");
 
-      // Basic Input Validation
+      // Validasi input dasar (inputScore dihapus)
       if (!/^\d{7,10}$/.test(governorIdInput)) {
         return interaction.editReply({
           content:
             "❌ Error: Invalid Governor ID. Please enter 7-10 digits only.",
         });
       }
+      // Memastikan file yang diunggah adalah gambar
       if (!proofAttachment.contentType?.startsWith("image/")) {
         return interaction.editReply({
           content: "❌ Error: The `proof_screenshot` file must be an image.",
         });
       }
-      if (inputScore <= 0) {
-        return interaction.editReply({
-          content: "❌ Error: `input_score` must be a positive number.",
-        });
-      }
 
-      // Convert the image to Base64
+      // Mengonversi gambar ke Base64
       await interaction.editReply({
         content: "⏳ Processing your submission... Converting image...",
       });
@@ -122,14 +114,14 @@ module.exports = {
         });
       }
 
-      // Prepare the payload for Google Apps Script (V3)
+      // Menyiapkan payload untuk dikirim ke Google Apps Script (inputScore dihapus)
       const payload = {
-        command: "submit_prekvk_data_v3", // New command name for the backend
+        command: "submit_prekvk_data_v3", // Command name untuk backend
         data: {
           discordUserId: interaction.user.id,
           governorId: governorIdInput,
-          proofImageBase64: proofImageBase64, // Always send the screenshot
-          inputScore: inputScore, // Always send the input score
+          proofImageBase64: proofImageBase64,
+          // inputScore: inputScore, // Baris ini dihapus
         },
       };
 
@@ -137,33 +129,37 @@ module.exports = {
         content: "⏳ Submitting data to the backend...",
       });
 
-      // Send the request to Google Apps Script
-      console.log(`[INFO] Sending V3 payload for user ${interaction.user.id}`);
+      // Mengirim request ke Google Apps Script
+      console.log(
+        `[INFO] Sending V3 payload (Screenshot Only) for user ${interaction.user.id}`
+      );
       const response = await fetch(appsScriptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const responseStatus = response.status;
-      const responseText = await response.text();
+      const responseText = await response.text(); // Ambil teks respons
       console.log(
         `[INFO] Backend response status ${responseStatus} for user ${interaction.user.id}.`
       );
 
       let result;
 
-      // Handle backend errors
+      // Menangani error dari backend
       if (!response.ok) {
         console.error(
-          `[ERROR] Backend error V3 for user ${interaction.user.id}. Status: ${responseStatus}. Response: ${responseText}`
+          `[ERROR] Backend error V3 (Screenshot Only) for user ${interaction.user.id}. Status: ${responseStatus}. Response: ${responseText}`
         );
         let errorMsg = `Error communicating with backend (Status: ${responseStatus}).`;
         try {
+          // Coba parse JSON jika responsnya JSON
           const parsedError = JSON.parse(responseText);
           errorMsg = `❌ Backend Error: ${
             parsedError.message || responseText || "Unknown error"
           }`;
         } catch (e) {
+          // Jika bukan JSON, tampilkan teks respons mentah
           errorMsg = `❌ Backend Error: ${
             responseText || `Status ${responseStatus}`
           }`;
@@ -171,17 +167,17 @@ module.exports = {
         return interaction.editReply({ content: errorMsg });
       }
 
-      // Parse successful backend response
+      // Mem-parse respons sukses dari backend
       try {
         result = JSON.parse(responseText);
         console.log(
-          `[DEBUG] Parsed V3 response for user ${
+          `[DEBUG] Parsed V3 response (Screenshot Only) for user ${
             interaction.user.id
           }: ${JSON.stringify(result)}`
         );
       } catch (parseError) {
         console.error(
-          `[ERROR] Failed to parse V3 response for user ${interaction.user.id}. Error: ${parseError}. Response: ${responseText}`
+          `[ERROR] Failed to parse V3 response (Screenshot Only) for user ${interaction.user.id}. Error: ${parseError}. Response: ${responseText}`
         );
         return interaction.editReply({
           content:
@@ -189,11 +185,11 @@ module.exports = {
         });
       }
 
-      // Display the results in an Embed
+      // Menampilkan hasil dalam Embed
       if (result.status === "success" && result.details) {
         const details = result.details;
         const embed = new EmbedBuilder()
-          .setColor(details.note ? 0xffcc00 : 0x00ff00) // Yellow if note exists, green otherwise
+          .setColor(details.note ? 0xffcc00 : 0x00ff00) // Kuning jika ada catatan, hijau jika tidak
           .setTitle("✅ Pre-KvK Submission Processed!")
           .setDescription(
             result.message || "Your Pre-KvK data has been processed."
@@ -216,18 +212,18 @@ module.exports = {
             }
           );
 
-        // Add fields based on the submission category determined by the backend
+        // Menambahkan field spesifik berdasarkan kategori yang ditentukan backend
         switch (details.submissionCategory) {
-          case "Rank 1-100 (Score Input)":
+          case "Rank 1-100 (SS Score)": // Nama kategori mungkin berubah sesuai backend
             embed.addFields(
               {
-                name: "Detected Rank (from SS)",
+                name: "Detected Rank",
                 value: details.extractedRank?.toString() || "N/A",
                 inline: true,
               },
               {
-                name: "Inputted Score",
-                value: details.inputScore?.toLocaleString() || "N/A",
+                name: "Score (from SS)", // Label diubah
+                value: details.extractedScore?.toLocaleString() ?? "N/A", // Gunakan extractedScore
                 inline: true,
               },
               {
@@ -237,7 +233,7 @@ module.exports = {
               }
             );
             break;
-          case "Rank 101-1000 (SS)":
+          case "Rank 101-1000 (SS Rank)": // Nama kategori mungkin berubah
             embed.addFields(
               {
                 name: "Detected Rank",
@@ -258,11 +254,11 @@ module.exports = {
               }
             );
             break;
-          case "Score Input (Not Top 1000)":
+          case "Score Input (Not Top 1000 - SS Score)": // Nama kategori mungkin berubah
             embed.addFields(
               {
-                name: "Inputted Score",
-                value: details.inputScore?.toLocaleString() || "N/A",
+                name: "Score (from SS)", // Label diubah
+                value: details.extractedScore?.toLocaleString() ?? "N/A", // Gunakan extractedScore
                 inline: true,
               },
               {
@@ -279,14 +275,14 @@ module.exports = {
               }
             );
             break;
-          default: // Fallback if category is unknown
+          default: // Fallback jika kategori tidak dikenal
             embed.addFields(
               {
-                name: "Detected/Input Value",
+                name: "Detected Rank/Score", // Label umum
                 value:
                   (
-                    details.extractedRank || details.inputScore
-                  )?.toLocaleString() || "N/A",
+                    details.extractedRank || details.extractedScore
+                  )?.toLocaleString() ?? "N/A",
                 inline: true,
               },
               {
@@ -300,11 +296,12 @@ module.exports = {
             );
         }
 
+        // Menambahkan timestamp dan footer
         embed
           .setTimestamp()
           .setFooter({ text: `Submitted by: ${interaction.user.username}` });
 
-        // Add the note from the backend if it exists
+        // Menambahkan catatan dari backend jika ada
         if (details.note) {
           embed.addFields({
             name: "⚠️ Note",
@@ -313,11 +310,12 @@ module.exports = {
           });
         }
 
-        await interaction.editReply({ embeds: [embed], content: "" }); // Clear loading message
+        // Mengedit balasan dengan embed hasil
+        await interaction.editReply({ embeds: [embed], content: "" });
       } else {
-        // Handle cases where backend status is not 'success' or details are missing
+        // Menangani kasus jika status backend bukan 'success' atau detail hilang
         console.warn(
-          `[WARN] Logical error V3 or missing details for user ${
+          `[WARN] Logical error V3 (Screenshot Only) or missing details for user ${
             interaction.user.id
           }: ${result.message || "No message"}`
         );
@@ -328,13 +326,13 @@ module.exports = {
         });
       }
     } catch (error) {
-      // Catch unexpected errors during execution
+      // Menangani error tak terduga selama eksekusi
       console.error(
-        `[ERROR] UNEXPECTED ERROR V3 in /submit_prekvk for user ${interaction.user.id}:`,
+        `[ERROR] UNEXPECTED ERROR V3 (Screenshot Only) in /submit_prekvk for user ${interaction.user.id}:`,
         error
       );
       try {
-        // Try to edit the reply if possible, otherwise send an ephemeral message
+        // Coba edit balasan jika memungkinkan, jika tidak kirim pesan ephemeral
         if (interaction.replied || interaction.deferred) {
           await interaction.editReply({
             content:
@@ -347,9 +345,9 @@ module.exports = {
           });
         }
       } catch (editError) {
-        // Log error if even sending the error message fails
+        // Log error jika mengirim pesan error pun gagal
         console.error(
-          "[ERROR] Failed to send/edit reply V3 with unexpected error:",
+          "[ERROR] Failed to send/edit reply V3 (Screenshot Only) with unexpected error:",
           editError
         );
       }
