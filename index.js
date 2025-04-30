@@ -1,5 +1,5 @@
-// index.js (Complete English Version with Fixes v7 - Fixed Cancel Lock Logic)
-require("dotenv").config(); // Ensure environment variables/secrets are loaded
+// index.js (Complete English Version with Interaction Fixes)
+require("dotenv").config();
 const {
   Client,
   GatewayIntentBits,
@@ -11,7 +11,7 @@ const {
   StringSelectMenuOptionBuilder,
   ButtonBuilder,
   ButtonStyle,
-  MessageType,
+  MessageType, // Keep this for message reply check
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -19,24 +19,21 @@ const {
 } = require("discord.js");
 const fs = require("node:fs");
 const path = require("node:path");
-const fetch = require("node-fetch"); // Ensure node-fetch@2 is installed if using require
+const fetch = require("node-fetch");
 
 // State management
 const registrationState = new Map();
-// --- CHANNEL LOCK MANAGEMENT ---
-// Define the Set HERE to be managed centrally by index.js
+// Central channel lock management
 const activeRegistrationChannels = new Set();
-// ---
 
 // Load Credentials & Configuration
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const appsScriptUrl = process.env.APPS_SCRIPT_WEB_APP_URL;
 
+// Basic validation for environment variables
 if (!token) {
-  console.error(
-    "Error: DISCORD_BOT_TOKEN not found in environment variables/secrets!"
-  );
+  console.error("Error: DISCORD_BOT_TOKEN not found!");
   process.exit(1);
 }
 if (!clientId) {
@@ -51,7 +48,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // Ensure this intent is ENABLED in the Developer Portal
+    GatewayIntentBits.MessageContent, // Ensure this is enabled in Developer Portal
   ],
 });
 
@@ -89,136 +86,109 @@ client.once(Events.ClientReady, (readyClient) => {
   console.log(`>>> Bot Ready! Logged in as ${readyClient.user.tag} <<<`);
 });
 
-// Function to handle logic after account type selection (English UI)
+// Function to handle logic after account type selection
 async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
   console.log(
     `[Function] handleAccountTypeSelection called for type: ${selectedType}`
   );
-  const channelId = interaction.channel?.id; // Get channel ID for potential lock release on error
+  const channelId = interaction.channel?.id;
+  const messageId = interaction.message.id; // Get messageId for state
 
   try {
-    // Assume interaction was deferred BEFORE calling this function (usually via deferUpdate)
-    if (!interaction.deferred && !interaction.replied) {
-      console.warn(
-        `[WARN] handleAccountTypeSelection called on non-deferred/replied interaction ${interaction.id}`
-      );
-      try {
-        // Attempt to defer if not already done
-        await interaction.deferUpdate();
-      } catch (deferError) {
-        console.error(
-          `[ERROR] Fallback deferUpdate failed in handleAccountTypeSelection:`,
-          deferError
-        );
-        // --- UNLOCK ON ERROR ---
-        if (channelId && activeRegistrationChannels.has(channelId)) {
-          // Check before delete
-          activeRegistrationChannels.delete(channelId);
-          console.log(
-            `[DEBUG] Channel ${channelId} unlocked due to handleAccountTypeSelection defer error.`
-          );
-        }
-        // ---
-        return; // Stop if defer fails
-      }
-    }
+    // Interaction should already be deferred (deferUpdate) before calling this
 
     let nextEmbed;
     let componentsRow1;
-    // Back and Cancel buttons in English
     let componentsRow2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId("register_back_to_type")
-        .setLabel("Back") // English
+        .setLabel("Back")
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId("register_cancel")
-        .setLabel("Cancel") // English
+        .setLabel("Cancel")
         .setStyle(ButtonStyle.Danger)
     );
 
-    // Store initial state
-    stateMap.set(interaction.message.id, {
-      step: "select_status_or_filler",
+    // Update state (assuming previous step was selecting type)
+    stateMap.set(messageId, {
+      step: "select_status_or_filler", // Next expected step
       userId: interaction.user.id,
       accountType: selectedType,
-      channelId: channelId, // Store channelId in state for later reference
+      channelId: channelId,
     });
     console.log(
-      `[DEBUG] Initial state stored for message ${interaction.message.id}:`,
-      stateMap.get(interaction.message.id)
+      `[DEBUG] State updated for message ${messageId}:`,
+      stateMap.get(messageId)
     );
 
-    // Build UI based on selection (English UI)
+    // Build UI for the next step
     if (selectedType === "main") {
       nextEmbed = new EmbedBuilder()
         .setColor(0x0099ff)
-        .setTitle("📝 Register Main Account") // English
-        .setDescription("Please select your account status:") // English
+        .setTitle("📝 Register Main Account")
+        .setDescription("Please select your account status:")
         .setTimestamp();
       const statusSelect = new StringSelectMenuBuilder()
         .setCustomId("register_select_main_status")
-        .setPlaceholder("Select status...") // English
+        .setPlaceholder("Select status...")
         .addOptions(
           new StringSelectMenuOptionBuilder()
-            .setLabel("DKP 2921 Old Player") // Keep specific labels if needed
+            .setLabel("DKP 2921 Old Player")
             .setValue("Old Player"),
           new StringSelectMenuOptionBuilder()
-            .setLabel("DKP Migrants") // Keep specific labels if needed
+            .setLabel("DKP Migrants")
             .setValue("Migrants")
         );
       componentsRow1 = new ActionRowBuilder().addComponents(statusSelect);
     } else if (selectedType === "farm") {
       nextEmbed = new EmbedBuilder()
         .setColor(0x0099ff)
-        .setTitle("📝 Register Farm Account") // English
-        .setDescription('Is this farm account a designated "Filler Account"?') // English
+        .setTitle("📝 Register Farm Account")
+        .setDescription('Is this farm account a designated "Filler Account"?')
         .setTimestamp();
       const fillerSelect = new StringSelectMenuBuilder()
         .setCustomId("register_select_filler_status")
-        .setPlaceholder("Is this a filler account?") // English
+        .setPlaceholder("Is this a filler account?")
         .addOptions(
           new StringSelectMenuOptionBuilder()
-            .setLabel("Yes") // English
-            .setDescription("This farm will be used as a filler.") // English
+            .setLabel("Yes")
+            .setDescription("This farm will be used as a filler.")
             .setValue("true"),
           new StringSelectMenuOptionBuilder()
-            .setLabel("No") // English
-            .setDescription("This farm is NOT a filler.") // English
+            .setLabel("No")
+            .setDescription("This farm is NOT a filler.")
             .setValue("false")
         );
       componentsRow1 = new ActionRowBuilder().addComponents(fillerSelect);
     } else {
+      // This case should ideally not be reached if interaction handling is correct
       console.error(
         `[ERROR] Unknown selectedType in handleAccountTypeSelection: ${selectedType}`
       );
-      // Edit the original reply (which should exist due to deferUpdate)
       await interaction.editReply({
-        content: "An unexpected error occurred processing the account type.", // English
+        content: "An unexpected error occurred processing the account type.",
         embeds: [],
         components: [],
       });
-      // --- UNLOCK ON ERROR ---
       if (channelId && activeRegistrationChannels.has(channelId)) {
-        // Check before delete
         activeRegistrationChannels.delete(channelId);
         console.log(
           `[DEBUG] Channel ${channelId} unlocked due to unknown account type.`
         );
       }
-      // ---
+      stateMap.delete(messageId); // Clean up state
       return;
     }
 
-    console.log(
-      `[DEBUG] Editing reply for ${selectedType} selection (interaction: ${interaction.id}).`
-    );
-    // Edit the original reply with the next step
+    // Edit the original reply (interaction is already deferred)
     await interaction.editReply({
       embeds: [nextEmbed],
       components: [componentsRow1, componentsRow2],
     });
-    console.log(`[DEBUG] Interaction reply edited for ${interaction.id}.`);
+    console.log(
+      `[DEBUG] Interaction reply edited for ${interaction.id} (handleAccountTypeSelection).`
+    );
   } catch (error) {
     console.error(
       `[ERROR] Error in handleAccountTypeSelection (interaction: ${interaction.id}, type: ${selectedType}):`,
@@ -226,48 +196,23 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
     );
     // --- UNLOCK ON ERROR ---
     if (channelId && activeRegistrationChannels.has(channelId)) {
-      // Check before delete
       activeRegistrationChannels.delete(channelId);
       console.log(
         `[DEBUG] Channel ${channelId} unlocked due to error in handleAccountTypeSelection.`
       );
     }
+    stateMap.delete(messageId); // Clean up state
     // ---
-    // Attempt to inform the user about the error
+    // Attempt to inform the user using followUp since interaction was deferred
     try {
-      // Check if we can still edit the original reply
-      if (interaction.message && interaction.isRepliable()) {
-        await interaction
-          .editReply({
-            content: "An error occurred while processing your selection.", // English
-            embeds: [],
-            components: [],
-            // flags: [MessageFlags.Ephemeral] // Keep public if original was public
-          })
-          .catch((e) =>
-            console.error(
-              "[ERROR] Failed to edit reply on handleAccountTypeSelection error:",
-              e
-            )
-          );
-      } else if (interaction.isRepliable()) {
-        // Fallback to followup if editReply isn't suitable
-        await interaction
-          .followUp({
-            content: "An error occurred while processing your selection.", // English
-            flags: [MessageFlags.Ephemeral], // Use flags for followup
-          })
-          .catch((e) =>
-            console.error(
-              "[ERROR] Failed to send followup on handleAccountTypeSelection error:",
-              e
-            )
-          );
-      }
-    } catch (errorReplyError) {
+      await interaction.followUp({
+        content: "An error occurred while processing your selection.",
+        flags: [MessageFlags.Ephemeral],
+      });
+    } catch (followUpError) {
       console.error(
-        "[ERROR] Failed to send error message in handleAccountTypeSelection:",
-        errorReplyError
+        "[ERROR] Failed to send followup on handleAccountTypeSelection error:",
+        followUpError
       );
     }
   }
@@ -275,7 +220,8 @@ async function handleAccountTypeSelection(interaction, selectedType, stateMap) {
 
 // Event Listener: Interaction Created (Handles commands AND components)
 client.on(Events.InteractionCreate, async (interaction) => {
-  const channelId = interaction.channel?.id; // Get channel ID early
+  const channelId = interaction.channel?.id;
+  const userId = interaction.user.id;
 
   // Handle Slash Commands
   if (interaction.isChatInputCommand()) {
@@ -283,7 +229,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!command) {
       console.error(`[ERROR] Command ${interaction.commandName} not found.`);
       try {
-        // Use flags for ephemeral reply
         await interaction.reply({
           content: `Command '${interaction.commandName}' not found.`,
           flags: [MessageFlags.Ephemeral],
@@ -297,46 +242,40 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     try {
-      // --- PASS activeRegistrationChannels TO 'register' COMMAND EXECUTE ---
       if (interaction.commandName === "register") {
-        // Pass the centrally managed Set to the command
         await command.execute(
           interaction,
           appsScriptUrl,
-          activeRegistrationChannels // <-- Pass the Set here
+          activeRegistrationChannels
         );
       } else {
-        // For other commands that might not need lock management
-        await command.execute(interaction, appsScriptUrl);
+        await command.execute(interaction, appsScriptUrl); // Pass url to other commands if needed
       }
-      // ---
     } catch (error) {
       console.error(
         `[ERROR] Error executing command ${interaction.commandName}:`,
         error
       );
-      // --- UNLOCK CHANNEL IF COMMAND EXECUTION FAILS (especially for register) ---
-      if (interaction.commandName === "register" && channelId) {
-        // Check if lock exists before deleting
-        if (activeRegistrationChannels.has(channelId)) {
-          activeRegistrationChannels.delete(channelId);
-          console.log(
-            `[DEBUG] Channel ${channelId} unlocked due to command execution error.`
-          );
-        }
+      if (
+        interaction.commandName === "register" &&
+        channelId &&
+        activeRegistrationChannels.has(channelId)
+      ) {
+        activeRegistrationChannels.delete(channelId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to command execution error.`
+        );
       }
-      // ---
       try {
-        // Send ephemeral error feedback
         if (interaction.replied || interaction.deferred) {
           await interaction.followUp({
             content: "Error executing this command!",
-            flags: [MessageFlags.Ephemeral], // Use flags
+            flags: [MessageFlags.Ephemeral],
           });
         } else {
           await interaction.reply({
             content: "Error executing this command!",
-            flags: [MessageFlags.Ephemeral], // Use flags
+            flags: [MessageFlags.Ephemeral],
           });
         }
       } catch (errorReplyError) {
@@ -358,121 +297,96 @@ client.on(Events.InteractionCreate, async (interaction) => {
       `[DEBUG] Select Menu Interaction received: ${customId} (interaction: ${interaction.id}, message: ${messageId})`
     );
 
-    // --- Defer Update (unless showing modal) ---
-    let needsDefer = true;
-    if (customId === "register_select_filler_status") {
-      needsDefer = false; // showModal acknowledges the interaction
-      console.log(
-        `[DEBUG] Skipping deferUpdate for ${customId} because showModal will be used.`
+    // --- State Check ---
+    const currentState = registrationState.get(messageId);
+    if (!currentState || currentState.userId !== userId) {
+      console.warn(
+        `[WARN] State/User mismatch for ${customId}: ${messageId}. Ignoring.`
       );
-    }
-
-    if (needsDefer) {
       try {
-        // Defer the update immediately to acknowledge the interaction
-        await interaction.deferUpdate();
-        console.log(
-          `[DEBUG] Interaction ${customId} (${interaction.id}) deferred.`
-        );
-      } catch (deferError) {
+        // Try to send an ephemeral message without acknowledging again
+        await interaction.reply({
+          content:
+            "This registration menu is no longer valid or belongs to another user. Please start over.",
+          flags: [MessageFlags.Ephemeral],
+        });
+      } catch (replyError) {
+        // If reply fails (e.g., already ack'd), log it but don't crash
         console.error(
-          `[ERROR] Failed to defer interaction ${customId} (${interaction.id}):`,
-          deferError
+          `[ERROR] Failed to send ephemeral reply for state mismatch (${customId}):`,
+          replyError
         );
-        // If defer fails (e.g., interaction already acknowledged elsewhere or timed out), stop processing
-        if (
-          customId.startsWith("register_") &&
-          channelId &&
-          (deferError.code === 10062 || deferError.code === 40060)
-        ) {
-          const currentState = registrationState.get(messageId);
-          if (
-            currentState &&
-            currentState.userId === interaction.user.id &&
-            currentState.channelId === channelId
-          ) {
-            if (activeRegistrationChannels.has(channelId)) {
-              activeRegistrationChannels.delete(channelId); // Use central Set
-              console.log(
-                `[DEBUG] Channel ${channelId} unlocked due to select menu defer error (Code: ${deferError.code}).`
-              );
-            }
-            registrationState.delete(messageId); // Clean up state too
-          }
-        }
-        return; // Don't proceed if defer failed
       }
+      return; // Stop processing
     }
-    // --- End Defer ---
+    // --- End State Check ---
 
     try {
+      // --- Defer Update ---
+      // Defer immediately after state check passes
+      await interaction.deferUpdate();
+      console.log(
+        `[DEBUG] Interaction ${customId} (${interaction.id}) deferred successfully.`
+      );
+      // --- End Defer ---
+
       // Process based on customId
       if (customId === "register_select_account_type") {
-        // Call the handler function (which will edit the deferred reply)
+        // Check step before processing
+        if (currentState.step !== undefined && currentState.step !== null) {
+          // Should be null/undefined at initial step
+          console.warn(
+            `[WARN] Unexpected step (${currentState.step}) for ${customId}. Resetting flow.`
+          );
+          // Optionally reset UI here or just ignore
+        }
         await handleAccountTypeSelection(
           interaction,
           selectedValue,
           registrationState
         );
       } else if (customId === "register_select_main_status") {
-        const currentState = registrationState.get(messageId);
-        // Validate state, user, and step
-        if (
-          !currentState ||
-          currentState.userId !== interaction.user.id ||
-          currentState.step !== "select_status_or_filler"
-        ) {
+        // Validate step
+        if (currentState.step !== "select_status_or_filler") {
           console.warn(
-            `[WARN] State/User/Step mismatch for ${customId}: ${messageId}`
+            `[WARN] Step mismatch for ${customId}: Expected 'select_status_or_filler', got '${currentState.step}'. Message: ${messageId}`
           );
-          // Edit the deferred reply with an error message
-          await interaction.editReply({
-            content:
-              "Registration session invalid or expired. Please start over with /register.", // English
-            embeds: [],
-            components: [],
-          });
-          // --- UNLOCK CHANNEL IF STATE INVALID ---
-          if (currentState && channelId === currentState.channelId) {
-            if (activeRegistrationChannels.has(channelId)) {
-              activeRegistrationChannels.delete(channelId); // Use central Set
-              console.log(
-                `[DEBUG] Channel ${channelId} unlocked due to state mismatch (main status).`
-              );
-            }
-          }
-          registrationState.delete(messageId); // Clean up state map
-          // ---
+          await interaction.followUp({
+            content: "Registration flow error. Please start over.",
+            flags: [MessageFlags.Ephemeral],
+          }); // Use followUp
+          activeRegistrationChannels.delete(channelId);
+          registrationState.delete(messageId); // Unlock and clear state
           return;
         }
         // Update state
         currentState.status = selectedValue;
-        currentState.step = "awaiting_screenshot";
+        currentState.step = "awaiting_screenshot"; // Next step
         registrationState.set(messageId, currentState);
 
-        // Prepare next step UI (English)
+        // Prepare next step UI
         const embed = new EmbedBuilder()
           .setColor(0x0099ff)
-          .setTitle(`📝 Register Main Account (${selectedValue})`) // English
+          .setTitle(`📝 Register Main Account (${selectedValue})`)
           .setDescription(
-            `Status selected: **${selectedValue}**. \n\nNext, please **REPLY TO THIS MESSAGE** with the **screenshot of your Governor Profile**.` // English
+            `Status selected: **${selectedValue}**. \n\nNext, please **REPLY TO THIS MESSAGE** with the **screenshot of your Governor Profile**.`
           )
           .addFields(
             {
-              name: "Account Type", // English
+              name: "Account Type",
               value: currentState.accountType,
               inline: true,
             },
-            { name: "Status", value: selectedValue, inline: true } // English
+            { name: "Status", value: selectedValue, inline: true }
           )
           .setFooter({
-            text: `Awaiting screenshot reply for message ID: ${messageId}`, // English
+            text: `Awaiting screenshot reply for message ID: ${messageId}`,
           })
           .setTimestamp();
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId("register_cancel")
-            .setLabel("Cancel") // English
+            .setLabel("Cancel")
             .setStyle(ButtonStyle.Danger)
         );
         // Edit the deferred reply
@@ -481,116 +395,76 @@ client.on(Events.InteractionCreate, async (interaction) => {
           embeds: [embed],
           components: [row],
         });
+        console.log(`[DEBUG] Edited reply for ${customId}.`);
       } else if (customId === "register_select_filler_status") {
-        // Interaction was NOT deferred earlier
-        const currentState = registrationState.get(messageId);
-        // Validate state, user, and step
-        if (
-          !currentState ||
-          currentState.userId !== interaction.user.id ||
-          currentState.step !== "select_status_or_filler"
-        ) {
+        // Validate step
+        if (currentState.step !== "select_status_or_filler") {
           console.warn(
-            `[WARN] State/User/Step mismatch for ${customId}: ${messageId}`
+            `[WARN] Step mismatch for ${customId}: Expected 'select_status_or_filler', got '${currentState.step}'. Message: ${messageId}`
           );
-          // --- UNLOCK CHANNEL IF STATE INVALID ---
-          if (currentState && channelId === currentState.channelId) {
-            if (activeRegistrationChannels.has(channelId)) {
-              activeRegistrationChannels.delete(channelId); // Use central Set
-              console.log(
-                `[DEBUG] Channel ${channelId} unlocked due to state mismatch (filler status).`
-              );
-            }
-          }
-          registrationState.delete(messageId); // Clean up state map
-          // ---
-          // Reply ephemerally since interaction wasn't deferred
-          try {
-            await interaction.reply({
-              content:
-                "Registration session invalid or expired. Please start over with /register.", // English
-              flags: [MessageFlags.Ephemeral], // Use flags
-            });
-          } catch (replyError) {
-            console.error(
-              `[ERROR] Failed to send ephemeral reply for state mismatch (${customId}):`,
-              replyError
-            );
-            // Fallback if reply fails (e.g., interaction already acknowledged)
-            try {
-              await interaction.followUp({
-                content: "Registration session invalid or expired.", // English
-                flags: [MessageFlags.Ephemeral], // Use flags
-              });
-            } catch (e) {
-              console.error("[ERROR] Failed followup for state mismatch:", e);
-            }
-          }
+          await interaction.followUp({
+            content: "Registration flow error. Please start over.",
+            flags: [MessageFlags.Ephemeral],
+          }); // Use followUp
+          activeRegistrationChannels.delete(channelId);
+          registrationState.delete(messageId); // Unlock and clear state
           return;
         }
         // Update state
         currentState.isFiller = selectedValue === "true";
-        currentState.step = "awaiting_main_id_modal";
+        currentState.step = "awaiting_main_id_modal"; // Next step
         registrationState.set(messageId, currentState);
 
-        // Create and show the modal (English)
+        // Create and show the modal
         const modal = new ModalBuilder()
-          .setCustomId(
-            `register_farm_modal_${interaction.user.id}_${messageId}`
-          )
-          .setTitle("Register Farm Account"); // English
+          .setCustomId(`register_farm_modal_${userId}_${messageId}`)
+          .setTitle("Register Farm Account");
         const mainIdInput = new TextInputBuilder()
           .setCustomId("register_main_id_input")
-          .setLabel("Enter Linked Main Account Governor ID") // English
+          .setLabel("Enter Linked Main Account Governor ID")
           .setStyle(TextInputStyle.Short)
-          .setPlaceholder("e.g., 123456789") // English
+          .setPlaceholder("e.g., 123456789")
           .setRequired(true)
           .setMinLength(7)
           .setMaxLength(10);
         const actionRow = new ActionRowBuilder().addComponents(mainIdInput);
         modal.addComponents(actionRow);
 
-        // Show the modal (this acknowledges the interaction)
+        // Show the modal (this acknowledges the original select menu interaction via deferUpdate,
+        // and the modal submission will be a NEW interaction)
         await interaction.showModal(modal);
         console.log(
-          `[DEBUG] Modal shown for ${customId} (interaction: ${interaction.id}).`
+          `[DEBUG] Modal shown for ${customId} (interaction: ${interaction.id}). Select Menu interaction acknowledged via deferUpdate.`
         );
       }
+      // Add handlers for other select menus if needed
     } catch (error) {
       console.error(
         `[ERROR] Error handling select menu ${customId} (${interaction.id}):`,
         error
       );
       // --- UNLOCK CHANNEL ON ERROR ---
-      const currentState = registrationState.get(messageId);
-      if (currentState && channelId === currentState.channelId) {
-        if (activeRegistrationChannels.has(channelId)) {
-          activeRegistrationChannels.delete(channelId); // Use central Set
-          console.log(
-            `[DEBUG] Channel ${channelId} unlocked due to select menu error.`
-          );
-        }
-        registrationState.delete(messageId); // Clean up state too
+      if (
+        currentState &&
+        channelId === currentState.channelId &&
+        activeRegistrationChannels.has(channelId)
+      ) {
+        activeRegistrationChannels.delete(channelId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to select menu error.`
+        );
       }
+      registrationState.delete(messageId); // Clean up state too
       // ---
-      // Send error feedback
+      // Send error feedback using followUp
       try {
-        // Check if interaction was deferred or replied to before the error
-        if (interaction.deferred || interaction.replied) {
-          await interaction.followUp({
-            content: "An error occurred processing your selection.", // English
-            flags: [MessageFlags.Ephemeral], // Use flags
-          });
-        } else if (interaction.isRepliable()) {
-          // If not acknowledged yet (e.g., error before showModal)
-          await interaction.reply({
-            content: "An error occurred processing your selection.", // English
-            flags: [MessageFlags.Ephemeral], // Use flags
-          });
-        }
+        await interaction.followUp({
+          content: "An error occurred processing your selection.",
+          flags: [MessageFlags.Ephemeral],
+        });
       } catch (errorReplyError) {
         console.error(
-          "[ERROR] Failed to send select menu error reply/followup:",
+          "[ERROR] Failed to send select menu error followup:",
           errorReplyError
         );
       }
@@ -605,6 +479,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.log(
       `[DEBUG] Button Interaction received: ${customId} (interaction: ${interaction.id}, message: ${messageId})`
     );
+    const currentState = registrationState.get(messageId); // Get state early for checks
+
+    // --- State and User Check (Optional but recommended for buttons too) ---
+    if (
+      customId !== "register_cancel" &&
+      (!currentState || currentState.userId !== userId)
+    ) {
+      console.warn(
+        `[WARN] State/User mismatch for button ${customId}: ${messageId}. Ignoring.`
+      );
+      try {
+        await interaction.reply({
+          content: "This button is no longer valid or belongs to another user.",
+          flags: [MessageFlags.Ephemeral],
+        });
+      } catch (replyError) {
+        console.error(
+          `[ERROR] Failed to send ephemeral reply for button state mismatch (${customId}):`,
+          replyError
+        );
+      }
+      return; // Stop processing
+    }
+    // --- End State Check ---
 
     try {
       // Defer update immediately
@@ -614,74 +512,80 @@ client.on(Events.InteractionCreate, async (interaction) => {
       );
 
       if (customId === "register_cancel") {
-        // Edit the deferred reply first
+        // Edit the message first
         await interaction.editReply({
-          content: "❌ Registration process cancelled.", // English
+          content: "❌ Registration process cancelled.",
           embeds: [],
           components: [],
         });
+        console.log(`[DEBUG] Edited message ${messageId} for cancellation.`);
 
-        // --- UNLOCK CHANNEL ON CANCEL ---
-        // Prioritize removing the channel lock, regardless of state finding.
-        if (channelId) {
-          // Ensure we have a channel ID from the interaction
-          if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // Delete the lock for this channel
+        // --- UNLOCK CHANNEL & CLEAN STATE ON CANCEL ---
+        // Use channelId from interaction if available, fallback to state if needed
+        const effectiveChannelId = channelId || currentState?.channelId;
+        if (effectiveChannelId) {
+          if (activeRegistrationChannels.has(effectiveChannelId)) {
+            activeRegistrationChannels.delete(effectiveChannelId);
             console.log(
-              `[DEBUG] Channel ${channelId} unlocked due to user cancellation.`
+              `[DEBUG] Channel ${effectiveChannelId} unlocked due to user cancellation.`
             );
           } else {
-            // Log if the lock was already gone (e.g., due to timeout or previous error)
             console.log(
-              `[DEBUG] Channel ${channelId} was already unlocked when cancel was processed.`
+              `[DEBUG] Channel ${effectiveChannelId} was already unlocked when cancel was processed.`
             );
           }
         } else {
-          // Log if channelId couldn't be determined from interaction (should be rare)
           console.warn(
-            `[WARN] Could not get channelId from cancel button interaction ${interaction.id}. Lock not removed.`
+            `[WARN] Could not determine channelId to unlock for cancel interaction ${interaction.id}.`
           );
         }
-
-        // --- CLEANUP STATE MAP ---
-        // Also attempt to clean up the specific state entry if it exists for this message
+        // Always try to delete state for this message
         if (registrationState.has(messageId)) {
           registrationState.delete(messageId);
           console.log(
             `[DEBUG] State for message ${messageId} deleted due to cancellation.`
           );
-        } else {
-          // Log if state was already gone
-          console.log(
-            `[DEBUG] State for message ${messageId} was already deleted or not found upon cancellation.`
-          );
         }
         // ---
       } else if (customId === "register_back_to_type") {
-        // Delete state when going back, but DO NOT unlock channel yet
+        // Validate step before going back
+        if (!currentState || currentState.step !== "select_status_or_filler") {
+          console.warn(
+            `[WARN] Back button clicked at unexpected step: ${currentState?.step}. Message: ${messageId}`
+          );
+          await interaction.followUp({
+            content: "Cannot go back from this step.",
+            flags: [MessageFlags.Ephemeral],
+          });
+          return;
+        }
+        // Delete current state when going back
         registrationState.delete(messageId);
-        // Rebuild the initial step UI (English)
+        console.log(
+          `[DEBUG] State deleted for message ${messageId} due to 'Back' button.`
+        );
+        // Rebuild the initial step UI
         const initialEmbed = new EmbedBuilder()
           .setColor(0x0099ff)
-          .setTitle("📝 New Account Registration") // English
+          .setTitle("📝 New Account Registration")
           .setDescription(
-            "Please select the type of account you want to register:" // English
+            "Please select the type of account you want to register:"
           )
           .setTimestamp();
         const accountTypeSelect = new StringSelectMenuBuilder()
           .setCustomId("register_select_account_type")
-          .setPlaceholder("Select account type...") // English
+          .setPlaceholder("Select account type...")
           .addOptions(
             new StringSelectMenuOptionBuilder()
-              .setLabel("Main Account") // English
+              .setLabel("Main Account")
               .setValue("main"),
             new StringSelectMenuOptionBuilder()
-              .setLabel("Farm Account") // English
+              .setLabel("Farm Account")
               .setValue("farm")
           );
         const cancelButton = new ButtonBuilder()
           .setCustomId("register_cancel")
-          .setLabel("Cancel") // English
+          .setLabel("Cancel")
           .setStyle(ButtonStyle.Danger);
         const selectRow = new ActionRowBuilder().addComponents(
           accountTypeSelect
@@ -689,11 +593,193 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const buttonRow = new ActionRowBuilder().addComponents(cancelButton);
         // Edit the deferred reply
         await interaction.editReply({
-          content: null, // Remove previous text content
+          content: null,
           embeds: [initialEmbed],
           components: [selectRow, buttonRow],
         });
-      }
+        console.log(`[DEBUG] Edited reply for ${customId}.`);
+      } else if (customId === "register_confirm_submit") {
+        // Validate step
+        if (!currentState || currentState.step !== "confirming_details") {
+          console.warn(
+            `[WARN] Submit button clicked at unexpected step: ${currentState?.step}. Message: ${messageId}`
+          );
+          await interaction.followUp({
+            content: "Cannot submit from this step. Please review the process.",
+            flags: [MessageFlags.Ephemeral],
+          });
+          return;
+        }
+
+        // Show processing message
+        await interaction.editReply({
+          content: "⏳ Submitting registration to backend...",
+          embeds: [],
+          components: [],
+        });
+
+        // Prepare final payload for Apps Script
+        let finalPayload;
+        let imageBase64 = "";
+        if (currentState.attachment) {
+          try {
+            imageBase64 = await imageToBase64(currentState.attachment.url);
+          } catch (imgErr) {
+            console.error(
+              "[ERROR] Failed to convert image on final submit:",
+              imgErr
+            );
+            await interaction.editReply({
+              content: `❌ Error processing screenshot: ${imgErr.message}. Registration cancelled.`,
+            });
+            activeRegistrationChannels.delete(channelId);
+            registrationState.delete(messageId); // Unlock & clear
+            return;
+          }
+        } else {
+          await interaction.editReply({
+            content: `❌ Error: Screenshot data missing before final submission. Registration cancelled.`,
+          });
+          activeRegistrationChannels.delete(channelId);
+          registrationState.delete(messageId); // Unlock & clear
+          return;
+        }
+
+        finalPayload = {
+          command: "register",
+          data: {
+            discordUserId: currentState.userId,
+            discordUsername: interaction.user.username, // Get username from current interaction
+            tipeAkun: currentState.accountType,
+            ...(currentState.accountType === "main" && {
+              statusMain: currentState.status,
+            }),
+            ...(currentState.accountType === "farm" && {
+              isFiller: currentState.isFiller,
+              idMainTerhubung: currentState.mainId,
+            }),
+            imageBase64: imageBase64,
+            attachmentUrl: currentState.attachment.url,
+          },
+        };
+
+        // Send data to Google Apps Script
+        console.log(
+          `[DEBUG] Sending final registration data to Apps Script for message ${messageId}`
+        );
+        const appsScriptResponse = await fetch(appsScriptUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(finalPayload),
+        });
+
+        let result;
+        const resultText = await appsScriptResponse.text();
+        if (!appsScriptResponse.ok) {
+          console.error(
+            `[ERROR] Apps Script error on final submit (${appsScriptResponse.status}): ${resultText}`
+          );
+          throw new Error(
+            `Registration backend failed: ${resultText.substring(0, 100)}`
+          ); // Throw error to be caught below
+        }
+        try {
+          result = JSON.parse(resultText);
+        } catch (parseErr) {
+          console.error(
+            `[ERROR] Failed to parse Apps Script success response: ${resultText}`
+          );
+          throw new Error(
+            "Registration backend sent an invalid success response."
+          );
+        }
+
+        console.log(
+          `[DEBUG] Final Apps Script response for ${messageId}:`,
+          result
+        );
+
+        // --- PROCESS SUCCESSFUL RESPONSE ---
+        if (result.status === "success" && result.details) {
+          const successEmbed = new EmbedBuilder()
+            .setColor(0x00ff00)
+            .setTitle("✅ Registration Successful!")
+            .setTimestamp();
+          if (result.message) successEmbed.setDescription(result.message);
+          successEmbed.addFields(
+            {
+              name: "Governor ID",
+              value: result.details.govId?.toString() || "N/A",
+              inline: true,
+            },
+            {
+              name: "Account Type",
+              value: result.details.type || currentState.accountType || "N/A",
+              inline: true,
+            }
+          );
+          if (result.details.type === "main") {
+            successEmbed.addFields(
+              {
+                name: "Status",
+                value: result.details.status || "N/A",
+                inline: true,
+              },
+              {
+                name: "Target KP",
+                value: result.details.targetKP?.toLocaleString() || "N/A",
+                inline: true,
+              },
+              {
+                name: "Target Deaths",
+                value: result.details.targetDeath?.toLocaleString() || "N/A",
+                inline: true,
+              }
+            );
+          } else if (result.details.type === "farm") {
+            successEmbed.addFields(
+              {
+                name: "Is Filler?",
+                value: result.details.isFiller ? "Yes" : "No",
+                inline: true,
+              },
+              {
+                name: "Linked Main ID",
+                value: result.details.linkedMainId || "N/A",
+                inline: true,
+              }
+            );
+          }
+          await interaction.editReply({
+            content: `${interaction.user}, your registration is complete!`,
+            embeds: [successEmbed],
+            components: [],
+          });
+          console.log(
+            `[INFO] Registration successful for user ${currentState.userId}, message ${messageId}.`
+          );
+        } else {
+          console.error(
+            `[ERROR] Registration failed via Apps Script (status not success or details missing):`,
+            result
+          );
+          throw new Error(
+            `Registration failed: ${
+              result.message || "Unknown error from registration system."
+            }`
+          );
+        }
+
+        // --- CLEAN UP STATE AND UNLOCK CHANNEL AFTER SUCCESS ---
+        registrationState.delete(messageId);
+        if (channelId && activeRegistrationChannels.has(channelId)) {
+          activeRegistrationChannels.delete(channelId);
+          console.log(
+            `[INFO] State cleared and channel ${channelId} unlocked successfully for message ${messageId}`
+          );
+        }
+        // ---
+      } // End submit button logic
       // Add handlers for other buttons if needed
     } catch (error) {
       console.error(
@@ -701,50 +787,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
         error
       );
       // --- UNLOCK CHANNEL ON BUTTON ERROR ---
-      const currentState = registrationState.get(messageId); // Try to get state for channel check
-      if (channelId) {
-        // Use channelId from interaction
-        if (activeRegistrationChannels.has(channelId)) {
-          activeRegistrationChannels.delete(channelId); // Use central Set
-          console.log(
-            `[DEBUG] Channel ${channelId} unlocked due to button error.`
-          );
-        }
-        // Attempt to clean up state even if lock removal failed or wasn't needed
-        if (currentState && channelId === currentState.channelId) {
-          registrationState.delete(messageId); // Clean state only if channel matches
-          console.log(
-            `[DEBUG] State for message ${messageId} deleted due to button error.`
-          );
-        } else if (registrationState.has(messageId)) {
-          // If state exists but channel doesn't match, still remove the state for this message
-          registrationState.delete(messageId);
-          console.log(
-            `[DEBUG] State for message ${messageId} deleted due to button error (channel mismatch).`
-          );
-        }
-      } else {
-        console.warn(
-          `[WARN] Could not get channelId from button interaction ${interaction.id} on error. Lock/State not reliably removed.`
+      if (
+        currentState &&
+        channelId === currentState.channelId &&
+        activeRegistrationChannels.has(channelId)
+      ) {
+        activeRegistrationChannels.delete(channelId);
+        console.log(
+          `[DEBUG] Channel ${channelId} unlocked due to button error.`
         );
-        // Attempt to remove state anyway if messageId is known
-        if (registrationState.has(messageId)) {
-          registrationState.delete(messageId);
-          console.log(
-            `[DEBUG] State for message ${messageId} deleted due to button error (channelId unknown).`
-          );
-        }
       }
+      registrationState.delete(messageId); // Clean up state too
       // ---
       // Send error feedback (interaction should be deferred)
       try {
         await interaction.followUp({
-          content: "An error occurred while processing the button click.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
+          content: `An error occurred: ${error.message}`,
+          flags: [MessageFlags.Ephemeral],
         });
       } catch (errorReplyError) {
         console.error(
-          "[ERROR] Failed to send button error reply:",
+          "[ERROR] Failed to send button error followup:",
           errorReplyError
         );
       }
@@ -764,71 +827,67 @@ client.on(Events.InteractionCreate, async (interaction) => {
     let userIdFromModal;
 
     try {
-      // Basic validation of modal custom ID format
+      // Validate modal custom ID format
       if (!customId.startsWith("register_farm_modal_")) {
         console.warn(
           `[WARN] Received modal submit with unexpected customId: ${customId}`
         );
         await interaction.reply({
-          content: "Error: Unknown form submitted.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
+          content: "Error: Unknown form submitted.",
+          flags: [MessageFlags.Ephemeral],
         });
         return;
       }
-
       const customIdParts = customId.split("_");
       if (customIdParts.length !== 5) {
         console.warn(
           `[WARN] Invalid modal customId format received: ${customId}. Parts: ${customIdParts.length}`
         );
         await interaction.reply({
-          content: "Error: Invalid form submission format.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
+          content: "Error: Invalid form submission format.",
+          flags: [MessageFlags.Ephemeral],
         });
         return;
       }
-
-      messageId = customIdParts[4]; // Get messageId from customId
-      userIdFromModal = customIdParts[3]; // Get userId from customId
-
-      // Validate extracted IDs
+      messageId = customIdParts[4];
+      userIdFromModal = customIdParts[3];
       if (!/^\d+$/.test(messageId) || !/^\d+$/.test(userIdFromModal)) {
         console.warn(
           `[WARN] Invalid messageId or userId in modal customId: ${customId}`
         );
         await interaction.reply({
-          content: "Error: Corrupted form submission data.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
+          content: "Error: Corrupted form submission data.",
+          flags: [MessageFlags.Ephemeral],
         });
         return;
       }
-
       // Validate user submitting the modal
       if (interaction.user.id !== userIdFromModal) {
         console.warn(
           `[WARN] Modal user mismatch: Expected ${userIdFromModal}, got ${interaction.user.id} for ${customId}`
         );
         await interaction.reply({
-          content: "Error processing form: User mismatch. Please start over.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
+          content: "Error processing form: User mismatch. Please start over.",
+          flags: [MessageFlags.Ephemeral],
         });
         // --- UNLOCK CHANNEL ON USER MISMATCH ---
-        const currentState = registrationState.get(messageId);
-        if (currentState && channelId === currentState.channelId) {
-          if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // Use central Set
-            console.log(
-              `[DEBUG] Channel ${channelId} unlocked due to modal user mismatch.`
-            );
-          }
-          registrationState.delete(messageId); // Clean state
+        const currentState = registrationState.get(messageId); // Get state to find channel
+        if (
+          currentState &&
+          activeRegistrationChannels.has(currentState.channelId)
+        ) {
+          activeRegistrationChannels.delete(currentState.channelId);
+          console.log(
+            `[DEBUG] Channel ${currentState.channelId} unlocked due to modal user mismatch.`
+          );
         }
+        registrationState.delete(messageId); // Clean state
         // ---
         return;
       }
 
       // Defer modal submission AFTER basic validation
-      await interaction.deferUpdate();
+      await interaction.deferUpdate(); // Use deferUpdate as we will edit the original message
       console.log(
         `[DEBUG] Modal Interaction ${customId} (${interaction.id}) deferred.`
       );
@@ -847,22 +906,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
           )})`
         );
         // --- UNLOCK CHANNEL IF STATE INVALID ---
-        if (currentState && channelId === currentState.channelId) {
-          if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // Use central Set
-            console.log(
-              `[DEBUG] Channel ${channelId} unlocked due to modal state mismatch.`
-            );
-          }
+        if (
+          currentState &&
+          activeRegistrationChannels.has(currentState.channelId)
+        ) {
+          activeRegistrationChannels.delete(currentState.channelId);
+          console.log(
+            `[DEBUG] Channel ${currentState.channelId} unlocked due to modal state mismatch.`
+          );
         }
         registrationState.delete(messageId); // Clean state
         // ---
-        // Send ephemeral followup (interaction is deferred)
         await interaction.followUp({
           content:
-            "Registration session invalid/expired. Please start over with /register.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
-        });
+            "Registration session invalid/expired. Please start over with /register.",
+          flags: [MessageFlags.Ephemeral],
+        }); // Use followUp
         return;
       }
 
@@ -870,91 +929,60 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const linkedMainId = interaction.fields.getTextInputValue(
         "register_main_id_input"
       );
-      if (!/^\d+$/.test(linkedMainId)) {
-        // Don't delete state or unlock, let user retry or cancel
+      if (!/^\d{7,10}$/.test(linkedMainId)) {
+        // Validate format
         await interaction.followUp({
           content:
-            "Error: Invalid Governor ID format. Please enter numbers only.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
-        });
-        return;
+            "Error: Invalid Linked Main ID format. Please enter 7-10 digits only.",
+          flags: [MessageFlags.Ephemeral],
+        }); // Use followUp
+        return; // Don't clear state, let user retry modal or cancel
       }
 
       // Update state
       currentState.mainId = linkedMainId;
-      currentState.step = "awaiting_screenshot";
+      currentState.step = "awaiting_screenshot"; // Set next step
       registrationState.set(messageId, currentState);
 
       // Edit the original interactive message
       try {
-        // Fetch the original message using messageId from modal customId
-        const originalMessage = await interaction.channel.messages.fetch(
-          messageId
-        );
-        if (!originalMessage) {
-          // Should not happen if state is valid, but handle as fallback
-          console.error(
-            `[ERROR] Original message ${messageId} not found after modal submit.`
-          );
-          // --- UNLOCK CHANNEL IF ORIGINAL MESSAGE MISSING ---
-          if (channelId === currentState.channelId) {
-            if (activeRegistrationChannels.has(channelId)) {
-              activeRegistrationChannels.delete(channelId); // Use central Set
-              console.log(
-                `[DEBUG] Channel ${channelId} unlocked due to missing original message after modal.`
-              );
-            }
-          }
-          registrationState.delete(messageId); // Clean state
-          // ---
-          await interaction.followUp({
-            content: "Error: Could not find the original registration message.", // English
-            flags: [MessageFlags.Ephemeral], // Use flags
-          });
-          return;
-        }
-
-        // Prepare next step UI (English)
+        // Prepare next step UI
         const embed = new EmbedBuilder()
           .setColor(0x0099ff)
           .setTitle(
             `📝 Register Farm Account (Filler: ${
-              currentState.isFiller ? "Yes" : "No" // English
+              currentState.isFiller ? "Yes" : "No"
             })`
           )
           .setDescription(
-            `Linked Main ID: **${linkedMainId}** received.\n\nNext, please **REPLY TO THIS MESSAGE** with the **screenshot of this Farm Account's Profile**.` // English
+            `Linked Main ID: **${linkedMainId}** received.\n\nNext, please **REPLY TO THIS MESSAGE** with the **screenshot of this Farm Account's Profile**.`
           )
           .addFields(
             {
-              name: "Account Type", // English
+              name: "Account Type",
               value: currentState.accountType,
               inline: true,
             },
             {
-              name: "Is Filler?", // English
-              value: currentState.isFiller ? "Yes" : "No", // English
+              name: "Is Filler?",
+              value: currentState.isFiller ? "Yes" : "No",
               inline: true,
             },
-            {
-              name: "Linked Main ID", // English
-              value: linkedMainId,
-              inline: true,
-            }
+            { name: "Linked Main ID", value: linkedMainId, inline: true }
           )
           .setFooter({
-            text: `Awaiting screenshot reply for message ID: ${messageId}`, // English
+            text: `Awaiting screenshot reply for message ID: ${messageId}`,
           })
           .setTimestamp();
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId("register_cancel")
-            .setLabel("Cancel") // English
+            .setLabel("Cancel")
             .setStyle(ButtonStyle.Danger)
         );
 
-        // Edit the original message
-        await originalMessage.edit({
+        // Edit the original message (interaction is already deferred)
+        await interaction.editReply({
           content: "",
           embeds: [embed],
           components: [row],
@@ -968,21 +996,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
           editError
         );
         // --- UNLOCK CHANNEL IF EDIT FAILS ---
-        if (channelId === currentState.channelId) {
-          if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // Use central Set
-            console.log(
-              `[DEBUG] Channel ${channelId} unlocked due to failed edit after modal.`
-            );
-          }
+        if (
+          currentState &&
+          activeRegistrationChannels.has(currentState.channelId)
+        ) {
+          activeRegistrationChannels.delete(currentState.channelId);
+          console.log(
+            `[DEBUG] Channel ${currentState.channelId} unlocked due to failed edit after modal.`
+          );
         }
         registrationState.delete(messageId); // Clean state
         // ---
         await interaction.followUp({
           content:
-            "Error updating registration prompt after form submission. Please start over.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
-        });
+            "Error updating registration prompt after form submission. Please start over.",
+          flags: [MessageFlags.Ephemeral],
+        }); // Use followUp
       }
     } catch (error) {
       console.error(
@@ -990,361 +1019,171 @@ client.on(Events.InteractionCreate, async (interaction) => {
         error
       );
       // --- UNLOCK CHANNEL ON GENERAL MODAL ERROR ---
-      // Attempt to get messageId again if needed (it should be set if format was valid)
       const currentMessageId = customId.startsWith("register_farm_modal_")
         ? customId.split("_")[4]
         : null;
       if (currentMessageId) {
         const currentState = registrationState.get(currentMessageId);
-        if (currentState && channelId === currentState.channelId) {
-          if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // Use central Set
-            console.log(
-              `[DEBUG] Channel ${channelId} unlocked due to modal submit error.`
-            );
-          }
-          registrationState.delete(currentMessageId); // Clean state
+        if (
+          currentState &&
+          activeRegistrationChannels.has(currentState.channelId)
+        ) {
+          activeRegistrationChannels.delete(currentState.channelId);
+          console.log(
+            `[DEBUG] Channel ${currentState.channelId} unlocked due to modal submit error.`
+          );
         }
+        registrationState.delete(currentMessageId); // Clean state
       } else {
         console.warn(
           "[WARN] Could not determine messageId to clean up state/lock after modal error."
         );
       }
       // ---
-      // Send error feedback (interaction should be deferred)
+      // Send error feedback (interaction should be deferred if reached here)
       try {
         await interaction.followUp({
-          content: "Error processing form submission.", // English
-          flags: [MessageFlags.Ephemeral], // Use flags
+          content: "Error processing form submission.",
+          flags: [MessageFlags.Ephemeral],
         });
       } catch (errorReplyError) {
         console.error(
-          "[ERROR] Failed to send modal error reply/followup:",
+          "[ERROR] Failed to send modal error followup:",
           errorReplyError
         );
       }
     }
     return; // End ModalSubmit handling
   }
-}); // End InteractionCreate listener
 
-// Event Listener: Message Created (for screenshot replies)
-client.on(Events.MessageCreate, async (message) => {
-  // Ignore bots and non-reply messages
-  if (message.author.bot || message.type !== MessageType.Reply) return;
+  // --- Handle Message Replies for Screenshots ---
+  if (message.type === MessageType.Reply) {
+    const repliedToMessageId = message.reference?.messageId;
+    if (!repliedToMessageId) return; // Ignore if reference is missing
 
-  // Get the ID of the message this message is replying to
-  const repliedToMessageId = message.reference?.messageId;
-  if (!repliedToMessageId) return;
+    const currentState = registrationState.get(repliedToMessageId);
+    // Check if this reply corresponds to the correct user and step
+    if (
+      !currentState ||
+      currentState.userId !== message.author.id ||
+      currentState.step !== "awaiting_screenshot"
+    ) {
+      return; // Not the reply we are looking for
+    }
 
-  // Check if the replied-to message corresponds to an active registration awaiting screenshot
-  const currentState = registrationState.get(repliedToMessageId);
-  // Validate state, user, and step
-  if (
-    !currentState ||
-    currentState.userId !== message.author.id ||
-    currentState.step !== "awaiting_screenshot"
-  ) {
-    // If it's not a reply to the correct step/user/message, ignore it silently
-    return;
-  }
-
-  // Get channelId from the stored state
-  const channelId = currentState.channelId;
-
-  // Check if the reply contains an image attachment
-  if (message.attachments.size > 0) {
-    const attachment = message.attachments.first();
-    if (attachment.contentType?.startsWith("image/")) {
-      console.log(
-        `[DEBUG] Screenshot received for message ${repliedToMessageId} from user ${message.author.id}`
-      );
-      // React to the user's message to show it's being processed
-      await message.react("👍").catch(console.error);
-
-      let processingMessage;
-      try {
-        // Reply to the user's screenshot message
-        processingMessage = await message
-          .reply("⏳ Processing your registration, please wait...") // English
-          .catch(console.error);
-        if (!processingMessage) {
-          console.error("[ERROR] Failed to send processing message reply.");
-          // Fallback: send a message to the channel if reply fails
-          processingMessage = await message.channel
-            .send(`Processing registration for ${message.author}...`) // English
-            .catch(console.error);
-        }
-      } catch (replyError) {
-        console.error(
-          "[ERROR] Failed to send initial processing message:",
-          replyError
+    // Check for image attachment
+    if (message.attachments.size > 0) {
+      const attachment = message.attachments.first();
+      if (attachment.contentType?.startsWith("image/")) {
+        console.log(
+          `[DEBUG] Screenshot received for message ${repliedToMessageId} from user ${message.author.id}`
         );
-        // If sending the processing message fails, unlock and clean up
-        if (channelId) {
-          if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // Use central Set
-            console.log(
-              `[DEBUG] Channel ${channelId} unlocked due to processing message failure.`
-            );
-          }
-        }
-        registrationState.delete(repliedToMessageId); // Clean state
-        return; // Stop processing
-      }
+        await message.react("👍").catch(console.error); // Acknowledge receipt
 
-      let imageBase64 = "";
-      try {
-        // Download image and convert to base64
-        const screenshotUrl = attachment.url;
-        const imageResponse = await fetch(screenshotUrl);
-        if (!imageResponse.ok)
-          throw new Error(
-            `Failed to download image: ${imageResponse.statusText} (URL: ${screenshotUrl})`
+        let processingMessage;
+        try {
+          // Send a "processing" message (replying to the screenshot message)
+          processingMessage = await message.reply(
+            "⏳ Processing your registration, please wait..."
           );
-        const imageArrayBuffer = await imageResponse.arrayBuffer();
-        imageBase64 = Buffer.from(imageArrayBuffer).toString("base64");
-        console.log(
-          `[DEBUG] Image converted to base64 for message ${repliedToMessageId}. Size: ${imageBase64.length}`
-        );
+          console.log("[DEBUG] Sent processing message reply.");
 
-        // Prepare payload for Apps Script
-        const finalPayload = {
-          command: "register",
-          data: {
-            discordUserId: currentState.userId,
-            discordUsername: message.author.username,
-            tipeAkun: currentState.accountType, // Keep original keys if Apps Script expects them
-            ...(currentState.accountType === "main" && {
-              statusMain: currentState.status,
-            }),
-            ...(currentState.accountType === "farm" && {
-              isFiller: currentState.isFiller,
-              idMainTerhubung: currentState.mainId,
-            }),
-            imageBase64: imageBase64,
-            attachmentUrl: screenshotUrl, // Include URL as well
-          },
-        };
-
-        console.log(
-          `[DEBUG] Sending final registration data to Apps Script for message ${repliedToMessageId}`
-        );
-        // Send data to Google Apps Script
-        const appsScriptResponse = await fetch(appsScriptUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(finalPayload),
-        });
-
-        if (!appsScriptResponse.ok) {
-          const errorText = await appsScriptResponse.text();
-          throw new Error(
-            `Apps Script Error (${appsScriptResponse.status}): ${errorText}`
+          // --- Store attachment info in state ---
+          currentState.attachment = { url: attachment.url, id: attachment.id };
+          currentState.step = "confirming_details"; // Move to confirmation step
+          registrationState.set(repliedToMessageId, currentState);
+          console.log(
+            `[DEBUG] State updated for ${repliedToMessageId} after screenshot.`
           );
-        }
-        const result = await appsScriptResponse.json();
-        console.log(
-          `[DEBUG] Final Apps Script response for ${repliedToMessageId}:`,
-          result
-        );
 
-        // --- PROCESS SUCCESSFUL RESPONSE from Apps Script ---
-        if (result.status === "success" && result.details) {
-          const successEmbed = new EmbedBuilder()
-            .setColor(0x00ff00)
-            .setTitle("✅ Registration Successful!") // English
-            .addFields(
-              {
-                name: "Governor ID", // English
-                value: result.details.govId?.toString() || "N/A",
-                inline: true,
-              },
-              {
-                name: "Account Type", // English
-                value: result.details.type || currentState.accountType || "N/A",
-                inline: true,
-              }
-              // Add more fields as needed based on Apps Script response
-            )
-            .setTimestamp();
-          // Add specific details based on account type from GAS response
-          if (result.details.type === "main") {
-            successEmbed.addFields(
-              {
-                name: "Status", // English
-                value: result.details.status || "N/A", // Use 'status' from GAS details
-                inline: true,
-              },
-              {
-                name: "Target KP", // English
-                value: result.details.targetKP?.toLocaleString() || "N/A",
-                inline: true,
-              },
-              {
-                name: "Target Deaths", // English
-                value: result.details.targetDeath?.toLocaleString() || "N/A",
-                inline: true,
-              }
+          // --- Show Confirmation ---
+          // Fetch the original interaction message to edit it
+          const originalInteractionMessage =
+            await message.channel.messages.fetch(repliedToMessageId);
+          if (!originalInteractionMessage)
+            throw new Error(
+              "Original interaction message not found for confirmation."
             );
-          } else if (result.details.type === "farm") {
-            successEmbed.addFields(
-              {
-                name: "Is Filler?", // English
-                value: result.details.isFiller ? "Yes" : "No", // Use 'isFiller' from GAS details
-                inline: true,
-              },
-              {
-                name: "Linked Main ID", // English
-                value: result.details.linkedMainId || "N/A", // Use 'linkedMainId' from GAS details
-                inline: true,
-              }
-            );
-          }
-          if (result.message) successEmbed.setDescription(result.message); // Use message from GAS if provided
 
-          // Edit the "Processing..." message with the success embed
+          // Call the confirmation function (needs interaction-like object)
+          // We can simulate parts of the interaction object needed by showConfirmationPublic
+          const simulatedInteraction = {
+            id: message.id, // Use the reply message ID for context, maybe? Or original?
+            message: originalInteractionMessage, // The message to be edited
+            channel: message.channel,
+            user: message.author,
+            // Mock methods if needed by showConfirmationPublic
+            isRepliable: () => true, // Assume it's repliable for editing
+            editReply: (options) => originalInteractionMessage.edit(options), // Route editReply to message.edit
+            followUp: (options) => message.channel.send(options), // Fallback followup
+            replied: true, // Mark as replied since we sent processing msg
+            deferred: false, // Not deferred in this context
+          };
+          await showConfirmationPublic(
+            simulatedInteraction,
+            currentState,
+            currentState.accountType === "farm" && !currentState.mainId
+          );
+
+          // Delete the "Processing..." message after showing confirmation
           if (processingMessage && !processingMessage.deleted) {
             await processingMessage
-              .edit({
-                content: `${message.author}, your registration is complete!`, // English
-                embeds: [successEmbed],
-              })
-              .catch(console.error);
-          } else {
-            // Fallback if processing message was deleted
-            await message.channel
-              .send({
-                content: `${message.author}, your registration is complete!`, // English
-                embeds: [successEmbed],
-              })
-              .catch(console.error);
-          }
-
-          // Remove components (buttons/menus) from the original interactive message
-          try {
-            const originalInteractionMessage =
-              await message.channel.messages.fetch(repliedToMessageId);
-            if (
-              originalInteractionMessage &&
-              originalInteractionMessage.components.length > 0
-            ) {
-              await originalInteractionMessage.edit({
-                components: [], // Remove all components
-              });
-              console.log(
-                `[DEBUG] Components removed from original message ${repliedToMessageId}`
+              .delete()
+              .catch((e) =>
+                console.warn("Could not delete processing message:", e)
               );
-            }
-          } catch (editError) {
-            // Ignore if message is already deleted or components removed
-            if (editError.code !== 10008) {
-              // Ignore "Unknown Message"
-              console.warn(
-                `[WARN] Could not remove components from original message ${repliedToMessageId}: ${editError.message}`
-              );
-            }
           }
-
-          // --- CLEAN UP STATE AND UNLOCK CHANNEL AFTER SUCCESS ---
-          registrationState.delete(repliedToMessageId);
-          if (channelId) {
-            if (activeRegistrationChannels.has(channelId)) {
-              activeRegistrationChannels.delete(channelId); // Use central Set
-              console.log(
-                `[INFO] Registration state cleared and channel ${channelId} unlocked successfully for message ${repliedToMessageId}`
-              );
-            }
-          } else {
-            // Should ideally not happen if state was valid, but log anyway
-            console.log(
-              `[INFO] Registration state cleared successfully for message ${repliedToMessageId} (channelId not found in final state).`
-            );
-          }
-          // ---
-
-          // --- PROCESS FAILED RESPONSE from Apps Script ---
-        } else {
+        } catch (error) {
           console.error(
-            `[ERROR] Registration failed via Apps Script for ${repliedToMessageId}. Response:`,
-            result
+            `[ERROR] Error processing screenshot reply for ${repliedToMessageId}:`,
+            error
           );
-          const failMessage = `❌ Registration failed: ${
-            result.message || "Unknown error from registration system." // English
-          }`;
-          // Edit the "Processing..." message with the failure reason
-          if (processingMessage && !processingMessage.deleted) {
-            await processingMessage.edit(failMessage).catch(console.error);
-          } else {
-            // Fallback reply if processing message deleted
-            await message.reply(failMessage).catch(console.error);
-          }
-          // --- CLEAN UP STATE AND UNLOCK CHANNEL AFTER GAS FAILURE ---
-          registrationState.delete(repliedToMessageId);
-          if (channelId) {
-            if (activeRegistrationChannels.has(channelId)) {
-              activeRegistrationChannels.delete(channelId); // Use central Set
-              console.log(
-                `[INFO] Registration state cleared and channel ${channelId} unlocked due to Apps Script failure for message ${repliedToMessageId}`
-              );
-            }
-          } else {
+          // --- UNLOCK CHANNEL ON SCREENSHOT PROCESSING ERROR ---
+          if (
+            currentState &&
+            activeRegistrationChannels.has(currentState.channelId)
+          ) {
+            activeRegistrationChannels.delete(currentState.channelId);
             console.log(
-              `[INFO] Registration state cleared due to Apps Script failure for message ${repliedToMessageId} (channelId not found in final state).`
+              `[DEBUG] Channel ${currentState.channelId} unlocked due to screenshot processing error.`
             );
           }
+          registrationState.delete(repliedToMessageId); // Clean state
           // ---
-        }
-        // --- HANDLE INTERNAL ERRORS DURING PROCESSING ---
-      } catch (error) {
-        console.error(
-          `[ERROR] Error during final registration processing for ${repliedToMessageId}:`,
-          error
-        );
-        const errorMessage = `An internal error occurred during registration: ${error.message}. Please try again or contact an admin.`; // English
-        // Edit the "Processing..." message with the internal error
-        if (processingMessage && !processingMessage.deleted) {
-          await processingMessage.edit(errorMessage).catch(console.error);
-        } else {
-          // Fallback reply if processing message deleted
-          await message.reply(errorMessage).catch(console.error);
-        }
-        // --- CLEAN UP STATE AND UNLOCK CHANNEL AFTER INTERNAL ERROR ---
-        registrationState.delete(repliedToMessageId);
-        if (channelId) {
-          if (activeRegistrationChannels.has(channelId)) {
-            activeRegistrationChannels.delete(channelId); // Use central Set
-            console.log(
-              `[INFO] Registration state cleared and channel ${channelId} unlocked due to internal error for message ${repliedToMessageId}`
-            );
+          // Inform user about the error
+          const errorMsg = `An error occurred processing your screenshot: ${error.message}. Please try again or contact an admin.`;
+          if (processingMessage && !processingMessage.deleted) {
+            await processingMessage.edit(errorMsg).catch(console.error);
+          } else {
+            await message.reply(errorMsg).catch(console.error);
           }
-        } else {
-          console.log(
-            `[INFO] Registration state cleared due to internal error for message ${repliedToMessageId} (channelId not found in final state).`
-          );
         }
-        // ---
+      } else {
+        // Reply if the attachment is not an image
+        await message
+          .reply("⚠️ Please reply with an **image file** (screenshot).")
+          .catch(console.error);
       }
-    } else {
-      // Reply if the attachment is not an image
-      // Don't stop the process or unlock, just prompt again
-      await message
-        .reply("⚠️ Please reply with an image file (screenshot).") // English
-        .catch(console.error);
     }
-  }
-  // Ignore replies that don't have attachments
-}); // End MessageCreate listener
+    // Ignore replies without attachments
+  } // End Message Reply Handling
+}); // End InteractionCreate listener
 
 // Login the Bot
 console.log("Attempting to log in...");
 client.login(token);
 
-// Start Keep-Alive Server (Optional but recommended for Replit free tier)
+// Optional Keep-Alive Server
 try {
-  const keepAlive = require("./server.js"); // Ensure server.js exists
-  keepAlive();
-  console.log("[INFO] Keep-alive server started.");
+  const keepAlive = require("./server.js");
+  if (typeof keepAlive === "function") {
+    keepAlive();
+    console.log("[INFO] Keep-alive server started.");
+  } else {
+    console.log(
+      "[INFO] keepAlive export is not a function, skipping server start."
+    );
+  }
 } catch (serverError) {
   if (serverError.code === "MODULE_NOT_FOUND") {
     console.log("[INFO] Keep-alive server (server.js) not found, skipping.");
