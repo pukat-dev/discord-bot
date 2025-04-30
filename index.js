@@ -379,14 +379,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return; // Stop processing
         }
 
-        // Defer update AFTER state check passes for subsequent steps
-        await interaction.deferUpdate();
-        console.log(
-          `[DEBUG] Interaction ${customId} (${interaction.id}) deferred successfully.`
-        );
-
         // --- Process subsequent steps ---
         if (customId === "register_select_main_status") {
+          // Defer update AFTER state check passes for subsequent steps that DON'T show a modal
+          await interaction.deferUpdate();
+          console.log(
+            `[DEBUG] Interaction ${customId} (${interaction.id}) deferred successfully.`
+          );
+
           // Validate step (as before)
           if (currentState.step !== "select_status_or_filler") {
             console.warn(
@@ -438,15 +438,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
           console.log(`[DEBUG] Reply edited for ${customId}.`);
         } else if (customId === "register_select_filler_status") {
+          // *** REMOVED deferUpdate() here because showModal() acknowledges the interaction ***
+          // console.log(`[DEBUG] Interaction ${customId} (${interaction.id}) will be deferred by showModal.`);
+
           // Validate step (as before)
           if (currentState.step !== "select_status_or_filler") {
             console.warn(
               `[WARN] Step mismatch for ${customId}: Expected 'select_status_or_filler', got '${currentState.step}'. Message: ${messageId}`
             );
-            await interaction.followUp({
-              content: "Registration flow error. Please start over.",
-              flags: [MessageFlags.Ephemeral],
-            }); // Flow Error Message
+            // Since we didn't defer, we need to reply or followUp differently if possible
+            try {
+              await interaction.reply({
+                content: "Registration flow error. Please start over.",
+                flags: [MessageFlags.Ephemeral],
+              });
+            } catch (replyErr) {
+              console.error(
+                "[ERROR] Failed to reply on filler status step mismatch:",
+                replyErr
+              );
+              // Attempt followup if reply fails (though unlikely needed here)
+              if (!interaction.replied && !interaction.deferred) {
+                try {
+                  await interaction.followUp({
+                    content: "Registration flow error. Please start over.",
+                    flags: [MessageFlags.Ephemeral],
+                  });
+                } catch (fErr) {}
+              }
+            }
             activeRegistrationChannels.delete(channelId);
             registrationState.delete(messageId);
             return;
@@ -471,10 +491,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const actionRow = new ActionRowBuilder().addComponents(mainIdInput);
           modal.addComponents(actionRow);
 
-          // Show the modal (this acknowledges the original select menu interaction via deferUpdate)
+          // Show the modal (this acknowledges the original select menu interaction)
           await interaction.showModal(modal);
           console.log(
-            `[DEBUG] Modal shown for ${customId} (interaction: ${interaction.id}). Select Menu interaction acknowledged via deferUpdate.`
+            `[DEBUG] Modal shown for ${customId} (interaction: ${interaction.id}). Select Menu interaction acknowledged via showModal.`
           );
         }
         // --- End subsequent step processing ---
@@ -503,12 +523,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // ---
       // Send error message (try followUp as it might be deferred)
       try {
-        // Ensure interaction can be followed up before trying
-        if (interaction.deferred || interaction.replied) {
-          await interaction.followUp({
-            content: "An error occurred while processing your selection.", // Processing Error Message
-            flags: [MessageFlags.Ephemeral],
-          });
+        // Ensure interaction can be followed up or replied to before trying
+        if (interaction.replied || interaction.deferred) {
+          // Check if the error is InteractionAlreadyReplied, if so, don't try to followup again
+          if (error.code !== "InteractionAlreadyReplied") {
+            await interaction.followUp({
+              content: "An error occurred while processing your selection.", // Processing Error Message
+              flags: [MessageFlags.Ephemeral],
+            });
+          } else {
+            console.warn(
+              `[WARN] Suppressing followUp for InteractionAlreadyReplied error in select menu handler.`
+            );
+          }
         } else {
           // If not deferred/replied, try a regular ephemeral reply
           await interaction.reply({
@@ -517,10 +544,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
       } catch (errorReplyError) {
-        console.error(
-          "[ERROR] Failed to send select menu error feedback:",
-          errorReplyError
-        );
+        // Avoid logging if the error is just InteractionAlreadyReplied again
+        if (errorReplyError.code !== "InteractionAlreadyReplied") {
+          console.error(
+            "[ERROR] Failed to send select menu error feedback:",
+            errorReplyError
+          );
+        }
       }
     }
     return; // End StringSelectMenu handling
