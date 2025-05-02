@@ -17,28 +17,33 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("leaderboard")
     .setDescription("Displays the KvK player rankings.") // English description
-    .addStringOption((option) =>
-      option
-        .setName("type")
-        .setDescription("Select the ranking type to display.") // English description
-        .setRequired(false) // Optional, defaults to 'Score'
-        .addChoices(
-          // English choices
-          { name: "KvK Score (Final Score)", value: "Score" },
-          { name: "Pure DKP (Zone KP)", value: "DKP" },
-          { name: "Pre-KvK (Converted KP)", value: "PreKvK" },
-          { name: "Power Reduce", value: "PowerReduce" },
-          { name: "Death T4 (T4 Troops Lost)", value: "DeathT4" },
-          { name: "Death T5 (T5 Troops Lost)", value: "DeathT5" }
-        )
-        .addIntegerOption((option) =>
-          option
-            .setName("limit")
-            .setDescription("Number of top ranks (default 100)")
-            .setRequired(false)
-        )
-    ),
-  // You could add an Integer option 'limit' here
+    .addStringOption(
+      (
+        option // Add the string option for type
+      ) =>
+        option
+          .setName("type")
+          .setDescription("Select the ranking type to display.") // English description
+          .setRequired(false) // Optional, defaults to 'Score'
+          .addChoices(
+            // English choices
+            { name: "KvK Score (Final Score)", value: "Score" },
+            { name: "Pure DKP (Zone KP)", value: "DKP" },
+            { name: "Pre-KvK (Converted KP)", value: "PreKvK" },
+            { name: "Power Reduce", value: "PowerReduce" },
+            { name: "Death T4 (T4 Troops Lost)", value: "DeathT4" },
+            { name: "Death T5 (T5 Troops Lost)", value: "DeathT5" }
+          )
+    ) // End of addStringOption
+    .addIntegerOption(
+      (
+        option // Add the integer option for limit separately
+      ) =>
+        option
+          .setName("limit")
+          .setDescription("Number of top ranks to display (default 100)") // English description
+          .setRequired(false) // Make it optional
+    ), // End of addIntegerOption
 
   async execute(interaction, appsScriptUrl) {
     console.log(
@@ -79,9 +84,9 @@ module.exports = {
     }
     // --- End Channel Check ---
 
-    const rankingType = interaction.options.getString("type") ?? "Score"; // Default to 'Score'
-    const limitToShow = 100; // Adjust if you add a limit option
-    // const limitToShow = interaction.options.getInteger('limit') ?? 100;
+    // Get options, providing defaults
+    const rankingType = interaction.options.getString("type") ?? "Score";
+    const limitToShow = interaction.options.getInteger("limit") ?? 100; // Get the limit option, default to 100
 
     if (!appsScriptUrl) {
       console.error(
@@ -125,7 +130,7 @@ module.exports = {
         command: "get_leaderboard",
         data: {
           type: rankingType,
-          limit: limitToShow,
+          limit: limitToShow, // Send the correct limit to the backend
         },
       };
 
@@ -228,7 +233,8 @@ module.exports = {
             `No ranking data available for type ${rankingType} at this time.` // English message
           );
         } else {
-          const displayLimit = 25; // Limit display in Discord to avoid hitting description limits
+          // Use the user-specified limit (or default) for display limit, but cap at 25 for Discord embed limits
+          const displayLimit = Math.min(limitToShow, 25);
           // Map the data to description lines
           const descriptionLines = leaderboardData
             .slice(0, displayLimit) // Take only top 'displayLimit' for display
@@ -241,9 +247,13 @@ module.exports = {
             );
 
           let description = descriptionLines.join("\n");
-          // Add a note if showing fewer entries than available
+          // Add a note if showing fewer entries than available from the backend OR if capped at 25
           if (leaderboardData.length > displayLimit) {
-            description += `\n\n*Showing Top ${displayLimit} of ${leaderboardData.length} available entries.*`; // English note
+            if (limitToShow > 25) {
+              description += `\n\n*Showing Top ${displayLimit} of ${leaderboardData.length} results requested.*`; // English note
+            } else {
+              description += `\n\n*Showing Top ${displayLimit} of ${leaderboardData.length} available entries.*`; // English note
+            }
           }
 
           // Check Discord description length limit (4096 chars)
