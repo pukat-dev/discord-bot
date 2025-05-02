@@ -3,47 +3,47 @@
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const fetch = require("node-fetch"); // Ensure node-fetch@2 is installed
 
-// Helper function for number formatting (can be moved to a utility file)
-// Using "id-ID" locale for number formatting consistency (e.g., using dots for thousands).
-// Change if a different locale (like "en-US" for commas) is preferred.
+// Helper function for number formatting
 const formatNumber = (num) => {
   if (num === null || num === undefined) return "0";
-  // Ensure conversion to Number before toLocaleString
   const number = Number(num);
-  return isNaN(number) ? "N/A" : number.toLocaleString("id-ID");
+  return isNaN(number) ? "N/A" : number.toLocaleString("id-ID"); // Using id-ID for dots as thousands separators
+};
+
+// Helper function to create a standard response embed
+const createResponseEmbed = (title, description, color) => {
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(description)
+    .setColor(color)
+    .setTimestamp()
+    .setFooter({ text: "RoK Stats System • Kingdom 2921" }); // Adjust footer if needed
 };
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("leaderboard")
-    .setDescription("Displays the KvK player rankings.") // English description
-    .addStringOption(
-      (
-        option // Add the string option for type
-      ) =>
-        option
-          .setName("type")
-          .setDescription("Select the ranking type to display.") // English description
-          .setRequired(false) // Optional, defaults to 'Score'
-          .addChoices(
-            // English choices
-            { name: "KvK Score (Final Score)", value: "Score" },
-            { name: "Pure DKP (Zone KP)", value: "DKP" },
-            { name: "Pre-KvK (Converted KP)", value: "PreKvK" },
-            { name: "Power Reduce", value: "PowerReduce" },
-            { name: "Death T4 (T4 Troops Lost)", value: "DeathT4" },
-            { name: "Death T5 (T5 Troops Lost)", value: "DeathT5" }
-          )
-    ) // End of addStringOption
-    .addIntegerOption(
-      (
-        option // Add the integer option for limit separately
-      ) =>
-        option
-          .setName("limit")
-          .setDescription("Number of top ranks to display (default 100)") // English description
-          .setRequired(false) // Make it optional
-    ), // End of addIntegerOption
+    .setDescription("Displays the KvK player rankings.")
+    .addStringOption((option) =>
+      option
+        .setName("type")
+        .setDescription("Select the ranking type to display.")
+        .setRequired(false)
+        .addChoices(
+          { name: "KvK Score (Final Score)", value: "Score" },
+          { name: "Pure DKP (Zone KP)", value: "DKP" },
+          { name: "Pre-KvK (Converted KP)", value: "PreKvK" },
+          { name: "Power Reduce", value: "PowerReduce" },
+          { name: "Death T4 (T4 Troops Lost)", value: "DeathT4" },
+          { name: "Death T5 (T5 Troops Lost)", value: "DeathT5" }
+        )
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("limit")
+        .setDescription("Number of top ranks to display (default 100)")
+        .setRequired(false)
+    ),
 
   async execute(interaction, appsScriptUrl) {
     console.log(
@@ -51,11 +51,9 @@ module.exports = {
     );
 
     try {
-      // Defer reply as soon as possible
       await interaction.deferReply();
     } catch (error) {
       console.error("[/leaderboard] Deferral failed:", error);
-      // Cannot proceed if deferral fails (e.g., error 10062)
       return;
     }
 
@@ -69,39 +67,40 @@ module.exports = {
         `[/leaderboard] Command used in wrong channel ${interaction.channelId}. Allowed: ${leaderboardChannelId}`
       );
       try {
-        // Edit the deferred reply since we already deferred
-        await interaction.editReply({
-          content: `This command can only be used in the <#${leaderboardChannelId}> channel.`, // English message
-          ephemeral: true, // Message only visible to the user
-        });
+        const embed = createResponseEmbed(
+          "Command Restriction",
+          `This command can only be used in the <#${leaderboardChannelId}> channel.`,
+          0xffcc00 // Yellow/Warning color
+        );
+        await interaction.editReply({ embeds: [embed], ephemeral: true });
       } catch (e) {
         console.error(
           "[/leaderboard] Failed to send wrong channel message:",
           e
         );
       }
-      return; // Stop execution if channel is wrong
+      return;
     }
     // --- End Channel Check ---
 
-    // Get options, providing defaults
     const rankingType = interaction.options.getString("type") ?? "Score";
-    const limitToShow = interaction.options.getInteger("limit") ?? 100; // Get the limit option, default to 100
+    const limitToShow = interaction.options.getInteger("limit") ?? 100;
 
     if (!appsScriptUrl) {
       console.error(
         "[ERROR] /leaderboard: APPS_SCRIPT_WEB_APP_URL is not configured."
       );
-      // Edit the deferred reply
-      return interaction.editReply({
-        content: "Error: Backend configuration is missing.", // English message
-        ephemeral: true,
-      });
+      const embed = createResponseEmbed(
+        "Configuration Error",
+        "Error: Backend configuration is missing.",
+        0xff0000 // Red color
+      );
+      return interaction.editReply({ embeds: [embed], ephemeral: true });
     }
 
     try {
       // Determine the initial fetching message based on type
-      let fetchingMessage = `⏳ Fetching ${rankingType} leaderboard data (Top ${limitToShow})...`; // Default message
+      let fetchingMessage = `⏳ Fetching ${rankingType} leaderboard data (Top ${limitToShow})...`;
       switch (rankingType) {
         case "DKP":
           fetchingMessage = `⏳ Fetching Pure DKP (Zone KP) data (Top ${limitToShow})...`;
@@ -123,211 +122,229 @@ module.exports = {
           fetchingMessage = `⏳ Fetching KvK Score (Final Score) data (Top ${limitToShow})...`;
           break;
       }
-      // Edit the deferred reply to show progress
       await interaction.editReply(fetchingMessage);
 
       const payload = {
         command: "get_leaderboard",
-        data: {
-          type: rankingType,
-          limit: limitToShow, // Send the correct limit to the backend
-        },
+        data: { type: rankingType, limit: limitToShow },
       };
 
       console.log(`[/leaderboard] Sending request to backend:`, payload);
-      // Call the backend Google Apps Script
       const response = await fetch(appsScriptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      // Check HTTP status before trying to parse JSON
+      // Initialize variables for the final reply
+      let finalEmbed;
+
+      // --- Process Backend Response ---
       if (!response.ok) {
+        // Handle HTTP errors (e.g., 500, 404)
         let errorMsg = `Backend Error (${response.status})`;
         try {
-          // Try to read error message from backend if available
           const errorData = await response.json();
-          errorMsg = `❌ Failed to retrieve data: ${
-            errorData.message || `Backend Error (${response.status})`
-          }`; // English message
+          errorMsg = errorData.message || errorMsg;
         } catch (e) {
-          console.error(
-            "[/leaderboard] Failed to parse error response from backend:",
-            e
-          );
-          // Keep the generic Backend Error message if parsing fails
+          /* Ignore parsing error, use default message */
         }
         console.error(
           `[/leaderboard] Backend request failed: ${response.status} ${response.statusText}`
         );
-        // Edit the deferred reply with the error
-        return interaction.editReply({ content: errorMsg });
-      }
+        finalEmbed = createResponseEmbed(
+          "Backend Error",
+          `❌ Failed to retrieve data: ${errorMsg}`,
+          0xff0000
+        ); // Red
+      } else {
+        // Handle successful HTTP response (2xx)
+        const responseData = await response.json();
+        console.log(
+          `[/leaderboard] Received response from backend:`,
+          JSON.stringify(responseData)
+        ); // Log the full response
 
-      // Parse the JSON response from the backend
-      const responseData = await response.json();
-      console.log(
-        `[/leaderboard] Received response from backend. Status: ${responseData.status}`
-      );
+        // Check the structure and status returned by the backend
+        if (responseData.status === "success") {
+          // Check if details contains the actual data (array) or a nested status (object)
+          if (Array.isArray(responseData.details)) {
+            // --- SUCCESS CASE: Data is in an array ---
+            const leaderboardData = responseData.details;
+            let embedTitle = "";
+            let valueLabel = "";
+            let embedColor = 0x0099ff; // Default success color (blue)
 
-      // 4. Process Response & Build Embed
-      // Check if the backend call was successful and returned data
-      if (
-        responseData.status === "success" &&
-        Array.isArray(responseData.details)
-      ) {
-        const leaderboardData = responseData.details; // Array: [{ rank, id, nickname, value }, ...]
+            switch (rankingType) {
+              case "DKP":
+                embedTitle = `🏅 Leaderboard - Pure DKP (Zone KP) (Top ${leaderboardData.length})`;
+                valueLabel = "KP";
+                embedColor = 0x0099ff;
+                break; // Blue
+              case "PreKvK":
+                embedTitle = `✨ Leaderboard - Pre-KvK (Converted KP) (Top ${leaderboardData.length})`;
+                valueLabel = "Converted KP";
+                embedColor = 0xffa500;
+                break; // Orange
+              case "PowerReduce":
+                embedTitle = `📉 Leaderboard - Power Reduce (Top ${leaderboardData.length})`;
+                valueLabel = "Power Reduce";
+                embedColor = 0xff4500;
+                break; // OrangeRed
+              case "DeathT4":
+                embedTitle = `💀 Leaderboard - Death T4 (Top ${leaderboardData.length})`;
+                valueLabel = "T4 Lost";
+                embedColor = 0x8b0000;
+                break; // DarkRed
+              case "DeathT5":
+                embedTitle = `☠️ Leaderboard - Death T5 (Top ${leaderboardData.length})`;
+                valueLabel = "T5 Lost";
+                embedColor = 0x4b0082;
+                break; // Indigo
+              case "Score":
+              default:
+                embedTitle = `🏆 Leaderboard - KvK Score (Final Score) (Top ${leaderboardData.length})`;
+                valueLabel = "Score";
+                embedColor = 0x00ff00;
+                break; // Green
+            }
 
-        // Determine Embed Title and Value Label based on Ranking Type
-        let embedTitle = "";
-        let valueLabel = "";
-        let embedColor = 0x0099ff; // Default color (blue)
+            if (leaderboardData.length === 0) {
+              finalEmbed = createResponseEmbed(
+                embedTitle, // Use the determined title
+                `No ranking data available for type ${rankingType} at this time.`,
+                embedColor // Use the determined color
+              );
+            } else {
+              const displayLimit = Math.min(limitToShow, 25);
+              const descriptionLines = leaderboardData
+                .slice(0, displayLimit)
+                .map(
+                  (p) =>
+                    `${p.rank}. \`${p.id}\` ${
+                      p.nickname || `ID: ${p.id}`
+                    } - **${formatNumber(p.value)}** ${valueLabel}`
+                );
 
-        switch (rankingType) {
-          case "DKP":
-            embedTitle = `🏅 Leaderboard - Pure DKP (Zone KP) (Top ${leaderboardData.length})`;
-            valueLabel = "KP";
-            embedColor = 0x0099ff; // Blue
-            break;
-          case "PreKvK":
-            embedTitle = `✨ Leaderboard - Pre-KvK (Converted KP) (Top ${leaderboardData.length})`;
-            valueLabel = "Converted KP";
-            embedColor = 0xffa500; // Orange
-            break;
-          case "PowerReduce":
-            embedTitle = `📉 Leaderboard - Power Reduce (Top ${leaderboardData.length})`;
-            valueLabel = "Power Reduce";
-            embedColor = 0xff4500; // OrangeRed
-            break;
-          case "DeathT4":
-            embedTitle = `💀 Leaderboard - Death T4 (Top ${leaderboardData.length})`;
-            valueLabel = "T4 Lost";
-            embedColor = 0x8b0000; // DarkRed
-            break;
-          case "DeathT5":
-            embedTitle = `☠️ Leaderboard - Death T5 (Top ${leaderboardData.length})`;
-            valueLabel = "T5 Lost";
-            embedColor = 0x4b0082; // Indigo
-            break;
-          case "Score":
-          default:
-            embedTitle = `🏆 Leaderboard - KvK Score (Final Score) (Top ${leaderboardData.length})`;
-            valueLabel = "Score";
-            embedColor = 0x00ff00; // Green
-            break;
-        }
+              let description = descriptionLines.join("\n");
+              if (leaderboardData.length > displayLimit) {
+                description += `\n\n*Showing Top ${displayLimit} of ${leaderboardData.length} available entries.*`;
+              }
+              if (description.length > 4096) {
+                description = description.substring(0, 4090) + "\n...";
+              }
 
-        // Create the embed message
-        const leaderboardEmbed = new EmbedBuilder()
-          .setColor(embedColor)
-          .setTitle(embedTitle)
-          .setTimestamp()
-          .setFooter({ text: "RoK Stats System • Kingdom 2921" }); // Adjust footer if needed
-
-        // Check if any data was returned
-        if (leaderboardData.length === 0) {
-          // This case should ideally be handled by the backend returning 'unavailable' status,
-          // but included here as a fallback.
-          leaderboardEmbed.setDescription(
-            `No ranking data available for type ${rankingType} at this time.` // English message
+              // Create the success embed using the helper
+              finalEmbed = createResponseEmbed(
+                embedTitle,
+                description,
+                embedColor
+              );
+            }
+          } else if (
+            typeof responseData.details === "object" &&
+            responseData.details !== null &&
+            responseData.details.status
+          ) {
+            // --- HANDLED CASE: Details contains a nested status (like 'unavailable' or 'error') ---
+            console.warn(
+              `[/leaderboard] Backend returned nested status: ${responseData.details.status}. Message: ${responseData.details.message}`
+            );
+            const nestedStatus = responseData.details.status;
+            const nestedMessage =
+              responseData.details.message ||
+              `Data for ${rankingType} is currently unavailable.`;
+            const embedColor =
+              nestedStatus === "unavailable" ? 0xffcc00 : 0xff0000; // Yellow for unavailable, Red for error
+            const embedTitle =
+              nestedStatus === "unavailable"
+                ? "Data Unavailable"
+                : "Backend Error";
+            finalEmbed = createResponseEmbed(
+              embedTitle,
+              `⚠️ ${nestedMessage}`,
+              embedColor
+            );
+          } else {
+            // --- UNEXPECTED SUCCESS CASE: Status is success, but details is not array or expected object ---
+            console.error(
+              "[/leaderboard] Backend returned success status but details format is unexpected:",
+              responseData.details
+            );
+            finalEmbed = createResponseEmbed(
+              "Processing Error",
+              "❌ Failed to process leaderboard data. Unexpected data format received.",
+              0xff0000
+            ); // Red
+          }
+        } else if (
+          responseData.status === "unavailable" ||
+          responseData.status === "error"
+        ) {
+          // --- HANDLED CASE: Top-level status is 'unavailable' or 'error' ---
+          console.warn(
+            `[/leaderboard] Backend returned top-level status: ${responseData.status}. Message: ${responseData.message}`
+          );
+          const embedColor =
+            responseData.status === "unavailable" ? 0xffcc00 : 0xff0000; // Yellow for unavailable, Red for error
+          const embedTitle =
+            responseData.status === "unavailable"
+              ? "Data Unavailable"
+              : "Backend Error";
+          finalEmbed = createResponseEmbed(
+            embedTitle,
+            `⚠️ ${
+              responseData.message || "Failed to retrieve leaderboard data."
+            }`,
+            embedColor
           );
         } else {
-          // Use the user-specified limit (or default) for display limit, but cap at 25 for Discord embed limits
-          const displayLimit = Math.min(limitToShow, 25);
-          // Map the data to description lines
-          const descriptionLines = leaderboardData
-            .slice(0, displayLimit) // Take only top 'displayLimit' for display
-            .map(
-              (player) =>
-                // Ensure nickname isn't null/undefined, fallback to ID if needed
-                `${player.rank}. \`${player.id}\` ${
-                  player.nickname || `ID: ${player.id}`
-                } - **${formatNumber(player.value)}** ${valueLabel}`
-            );
-
-          let description = descriptionLines.join("\n");
-          // Add a note if showing fewer entries than available from the backend OR if capped at 25
-          if (leaderboardData.length > displayLimit) {
-            if (limitToShow > 25) {
-              description += `\n\n*Showing Top ${displayLimit} of ${leaderboardData.length} results requested.*`; // English note
-            } else {
-              description += `\n\n*Showing Top ${displayLimit} of ${leaderboardData.length} available entries.*`; // English note
-            }
-          }
-
-          // Check Discord description length limit (4096 chars)
-          if (description.length > 4096) {
-            description = description.substring(0, 4090) + "\n..."; // Truncate if too long
-          }
-          leaderboardEmbed.setDescription(description);
+          // --- UNEXPECTED CASE: Unknown top-level status ---
+          console.error(
+            "[/leaderboard] Backend returned unknown status:",
+            responseData
+          );
+          finalEmbed = createResponseEmbed(
+            "Processing Error",
+            `❌ Failed to process leaderboard data. Unknown status received: ${responseData.status}`,
+            0xff0000
+          ); // Red
         }
-
-        // Edit the deferred reply with the final embed
-        await interaction.editReply({
-          content: "", // Remove the "Fetching..." message
-          embeds: [leaderboardEmbed],
-        });
-      } else if (
-        responseData.status === "unavailable" ||
-        responseData.status === "error"
-      ) {
-        // Handle cases where backend indicates data is unavailable or an error occurred
-        console.warn(
-          `[/leaderboard] Backend returned status: ${responseData.status}. Message: ${responseData.message}`
-        );
-        // Edit the deferred reply with the message from the backend
-        await interaction.editReply({
-          content: `⚠️ ${
-            responseData.message || "Failed to retrieve leaderboard data."
-          }`, // English message
-          embeds: [], // Ensure no old embed is shown
-        });
-      } else {
-        // Handle other unexpected responses from the backend
-        console.error(
-          "[/leaderboard] Backend returned unexpected status or invalid data format:",
-          responseData
-        );
-        // Edit the deferred reply with a generic error
-        await interaction.editReply({
-          content: `❌ Failed to process leaderboard data. Unknown response format received.`, // English message
-          embeds: [],
-        });
       }
+
+      // Edit the reply with the final embed
+      await interaction.editReply({ content: "", embeds: [finalEmbed] }); // Remove fetching message
     } catch (error) {
-      // Catch any errors during the command execution (e.g., network issues, parsing errors)
+      // Catch any errors during the command execution (e.g., network issues, JSON parsing errors)
       console.error("[/leaderboard] Error executing command:", error);
-      // Main catch block after deferReply attempt
       try {
-        // Try to edit the existing deferred reply (e.g., the "Fetching data..." message)
+        const errorEmbed = createResponseEmbed(
+          "Command Error",
+          "An error occurred while processing the leaderboard command.",
+          0xff0000 // Red
+        );
         await interaction.editReply({
-          content:
-            "An error occurred while processing the leaderboard command.", // English message
-          embeds: [],
+          content: "",
+          embeds: [errorEmbed],
           components: [],
         });
       } catch (editError) {
-        // If editing fails (e.g., interaction expired due to 10062 error earlier), try followUp
         console.error(
           "[/leaderboard] Failed to editReply in catch block:",
           editError
         );
-        // Don't try followUp if the initial error was 10062 (Unknown Interaction)
+        // Optional: Follow up if edit fails and error is not 10062 (Unknown Interaction)
         if (editError.code !== 10062) {
           try {
-            // Send a new message if editing the original reply failed
             await interaction.followUp({
-              content:
-                "An error occurred while processing the leaderboard command.", // English message
-              ephemeral: true, // Make it visible only to the user who ran the command
+              content: "An error occurred while processing the command.",
+              ephemeral: true,
             });
           } catch (followUpError) {
             console.error(
               "[/leaderboard] Failed to followUp in catch block:",
               followUpError
             );
-            // Log if even followUp fails
           }
         }
       }
