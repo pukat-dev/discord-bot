@@ -1,4 +1,4 @@
-// commands/mystats.js (Full Code - Sync with Latest GAS Logic - v17 - English - ID Validation 4-10 Digits)
+// commands/mystats.js (Full Code - Handle Rank Data Availability - v18 - English - ID Validation 4-10 Digits)
 
 const {
   SlashCommandBuilder,
@@ -14,7 +14,6 @@ const separator = {
   inline: false,
 };
 
-// Updated formatNumber to handle decimal places for points
 const formatNumber = (num, decimalPlaces = 0) => {
   if (num === null || num === undefined) return "N/A";
   const number = Number(num);
@@ -33,7 +32,6 @@ const calculatePercentage = (current, target) => {
   return parseFloat(percentage.toFixed(1));
 };
 
-// parseNumberSafe remains the same for internal calculations
 const parseNumberSafe = (value) => {
   if (value === null || value === undefined || value === "") return 0;
   const num = Number(value);
@@ -117,7 +115,6 @@ function formatZoneKpDetails(zoneDetails) {
   }
 }
 
-// Updated to display Death Points from fillers
 function formatFillerDetails(fillerDetails) {
   if (
     !fillerDetails ||
@@ -131,8 +128,7 @@ function formatFillerDetails(fillerDetails) {
       .map((filler) => {
         const t4 = formatNumber(filler.t4);
         const t5 = formatNumber(filler.t5);
-        // Assuming filler.score now represents equivalent death points
-        const deathPoints = formatNumber(filler.score, 1); // Display with 1 decimal
+        const deathPoints = formatNumber(filler.score, 1);
         return `• **ID \`${filler.id}\`**:\n  - T4 Dead: ${t4}\n  - T5 Dead: ${t5}\n  - **Death Points:** **${deathPoints}**`;
       })
       .join("\n\n");
@@ -168,7 +164,7 @@ module.exports = {
       } at ${new Date().toISOString()}`
     );
 
-    const registrationChannelId = "YOUR_REGISTRATION_CHANNEL_ID"; // Replace with your actual channel ID
+    const registrationChannelId = "YOUR_REGISTRATION_CHANNEL_ID";
 
     try {
       console.log(`[/mystats] Attempting deferReply...`);
@@ -298,7 +294,6 @@ module.exports = {
         const governorId = details.governorId;
         const requestedId = details.requestedId;
 
-        // Use new field names from GAS
         const targets = details.targets ?? {
           targetKP: 0,
           targetDeathPoints: 0,
@@ -339,12 +334,11 @@ module.exports = {
         };
         const linkedFarms = details.linkedFarms ?? [];
 
-        // Use new field names for calculations
         const actualTargetKP = parseNumberSafe(targets.targetKP);
         const actualTargetDeathPoints = parseNumberSafe(
           targets.targetDeathPoints
         );
-        const currentScore = parseNumberSafe(finalScoreData.score); // This score is already calculated conditionally in GAS
+        const currentScore = parseNumberSafe(finalScoreData.score);
         const currentRawDeaths = parseNumberSafe(deaths.totalMainDeaths);
         const currentMainDeathPoints = parseNumberSafe(
           deaths.totalMainDeathPoints
@@ -357,7 +351,6 @@ module.exports = {
         );
 
         const kpPercentage = calculatePercentage(currentScore, actualTargetKP);
-        // Calculate percentages based on points
         const rawDeathPointsPercentage = calculatePercentage(
           currentMainDeathPoints,
           actualTargetDeathPoints
@@ -375,7 +368,6 @@ module.exports = {
         let statusColor = 0x5865f2;
         let statusRemark = "";
 
-        // Determine status based on points percentage
         if (actualTargetKP > 0 && actualTargetDeathPoints > 0) {
           const kpMet = kpPercentage >= 100;
           const deathTargetMet = finalNeededDeathPoints <= 0;
@@ -426,10 +418,9 @@ module.exports = {
               currentScore
             )}\n**Status:** **${dkpStatus}**${statusRemark}`,
             inline: false,
-          } // Clarified Score label
+          }
         );
 
-        // Display Target Death Points and progress
         statsEmbed.addFields(separator, {
           name: "**🎯 Targets & Requirements**",
           value: `**Target KP:** ${formatNumber(
@@ -491,7 +482,6 @@ module.exports = {
           });
         }
 
-        // Display Total Death Points
         statsEmbed.addFields(separator, {
           name: "**☠️ Dead Troops (Main)**",
           value: `**T4:** ${formatNumber(
@@ -507,7 +497,6 @@ module.exports = {
           inline: false,
         });
 
-        // Display Equivalent Death Points Covered
         let fillerValue = formatFillerDetails(fillers.fillersDetail);
         let fillerSummary = `**Total Filler Score:** ${formatNumber(
           fillers.totalFillerScore
@@ -521,7 +510,12 @@ module.exports = {
         ) {
           fillerSummary = "*No filler contribution.*";
         }
-
+        if (fillers && Array.isArray(fillers.fillersDetail)) {
+          const detailsFormatted = formatFillerDetails(fillers.fillersDetail);
+          if (detailsFormatted !== "*No filler data submitted.*") {
+            fillerValue = detailsFormatted;
+          }
+        }
         statsEmbed.addFields(separator, {
           name: "**🧑‍🌾 Filler Contribution**",
           value: fillerSummary,
@@ -535,15 +529,15 @@ module.exports = {
           });
         }
 
-        // Display all three ranks with clearer labels
+        // *** PERUBAHAN DI SINI: Tampilkan rank dengan fallback N/A (Data Missing) ***
         statsEmbed.addFields(
           separator,
           {
             name: "**🏅 Ranking**",
             value:
-              `**DKP Rank (Zone KP):** ${rank.rankDKP ?? "N/A"}\n` +
-              `**Score Rank (KvK Score):** ${rank.rankScore ?? "N/A"}\n` +
-              `**Pre-KvK Rank (Pre-KvK KP):** ${rank.rankPreKvk ?? "N/A"}`,
+              `**DKP Rank (Zone KP):** ${rank.rankDKP}\n` + // Langsung tampilkan nilai dari backend
+              `**Score Rank (KvK Score):** ${rank.rankScore}\n` +
+              `**Pre-KvK Rank (Pre-KvK KP):** ${rank.rankPreKvk}`,
             inline: true,
           },
           {
@@ -552,6 +546,7 @@ module.exports = {
             inline: true,
           }
         );
+        // *** Akhir Perubahan Ranking ***
 
         console.log(`[/mystats] Sending final embed for ${governorId}`);
         await interaction.editReply({
