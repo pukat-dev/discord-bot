@@ -1,4 +1,4 @@
-// commands/mystats.js (Full Code - Handle Rank Data Availability - v18 - English - ID Validation 4-10 Digits)
+// commands/mystats.js (Full Code - Remove Ranking Display - v19 - English - ID Validation 4-10 Digits)
 
 const {
   SlashCommandBuilder,
@@ -164,7 +164,7 @@ module.exports = {
       } at ${new Date().toISOString()}`
     );
 
-    const registrationChannelId = "YOUR_REGISTRATION_CHANNEL_ID"; // Ganti dengan ID channel Anda
+    const registrationChannelId = "YOUR_REGISTRATION_CHANNEL_ID";
 
     try {
       console.log(`[/mystats] Attempting deferReply...`);
@@ -327,11 +327,7 @@ module.exports = {
           finalNeededDeathPoints: 0,
           dkpStatus: "N/A",
         };
-        const rank = details.rank ?? {
-          rankDKP: "N/A",
-          rankScore: "N/A",
-          rankPreKvk: "N/A",
-        };
+        // const rank = details.rank ?? { rankDKP: "N/A", rankScore: "N/A", rankPreKvk: "N/A" }; // Dihapus
         const linkedFarms = details.linkedFarms ?? [];
 
         const actualTargetKP = parseNumberSafe(targets.targetKP);
@@ -529,23 +525,24 @@ module.exports = {
           });
         }
 
-        // Tampilkan rank dengan fallback N/A (Data Missing)
+        // *** PERUBAHAN DI SINI: Hapus bagian Ranking ***
         statsEmbed.addFields(
           separator,
+          // { // Field Ranking dihapus
+          //     name: "**🏅 Ranking**",
+          //     value: `**DKP Rank (Zone KP):** ${rank.rankDKP}\n` +
+          //            `**Score Rank (KvK Score):** ${rank.rankScore}\n` +
+          //            `**Pre-KvK Rank (Pre-KvK KP):** ${rank.rankPreKvk}`,
+          //     inline: true
+          // },
           {
-            name: "**🏅 Ranking**",
-            value:
-              `**DKP Rank (Zone KP):** ${rank.rankDKP}\n` + // Langsung tampilkan nilai dari backend
-              `**Score Rank (KvK Score):** ${rank.rankScore}\n` +
-              `**Pre-KvK Rank (Pre-KvK KP):** ${rank.rankPreKvk}`,
-            inline: true,
-          },
-          {
+            // Field Linked Farms tetap ada, dibuat non-inline
             name: "**🔗 Linked Farms**",
             value: formatFarmList(linkedFarms).substring(0, 1024),
-            inline: true,
+            inline: false, // Ubah menjadi false
           }
         );
+        // *** Akhir Penghapusan Ranking ***
 
         console.log(`[/mystats] Sending final embed for ${governorId}`);
         await interaction.editReply({
