@@ -61,8 +61,8 @@ module.exports = {
       return interaction.reply({
         embeds: [
           buildErrorEmbed(
-            "❌ Invalid Channel",
-            `This command can only be used in ${channelMention}.`
+            "📢 Wrong Channel",
+            `You can only use this command in ${channelMention}. Please switch to that channel to continue.`
           ),
         ],
         ephemeral: true,
@@ -74,8 +74,8 @@ module.exports = {
       return interaction.reply({
         embeds: [
           buildErrorEmbed(
-            "❌ Configuration Error",
-            "Backend configuration is missing."
+            "⚙️ Configuration Error",
+            "Backend service is not configured properly. Please contact an admin."
           ),
         ],
         ephemeral: true,
@@ -93,8 +93,8 @@ module.exports = {
         return interaction.editReply({
           embeds: [
             buildErrorEmbed(
-              "❌ Invalid Governor ID",
-              "Please enter a valid Governor ID (7-10 digits only)."
+              "🆔 Invalid Governor ID",
+              "Please enter a valid Governor ID (7-10 digits)."
             ),
           ],
         });
@@ -104,15 +104,15 @@ module.exports = {
         return interaction.editReply({
           embeds: [
             buildErrorEmbed(
-              "❌ Invalid File Type",
-              "The uploaded file must be an image."
+              "🖼️ Invalid File Type",
+              "The uploaded file must be an image (e.g., JPG or PNG). Please try again."
             ),
           ],
         });
       }
 
       await interaction.editReply({
-        content: "⏳ Processing your submission... please wait a minute...",
+        content: "⏳ Processing your submission... please wait...",
       });
 
       let proofImageBase64;
@@ -124,8 +124,8 @@ module.exports = {
         return interaction.editReply({
           embeds: [
             buildErrorEmbed(
-              "❌ Image Error",
-              `Error processing image: ${imageError.message}. Please try uploading again.`
+              "📷 Image Error",
+              `Failed to process your image: ${imageError.message}. Please try uploading again.`
             ),
           ],
         });
@@ -141,7 +141,7 @@ module.exports = {
       };
 
       await interaction.editReply({
-        content: "⏳ Data is processing, almost done...",
+        content: "⏳ Submitting data to server... almost done...",
       });
 
       console.log(
@@ -160,19 +160,19 @@ module.exports = {
         console.error(
           `[ERROR] Backend error V3 for user ${interaction.user.id}. Status: ${responseStatus}. Response: ${responseText}`
         );
-        let errorMsg = `Error communicating with backend (Status: ${responseStatus}).`;
+        let errorMsg = `Failed to contact the server (Status: ${responseStatus}).`;
         try {
           const parsedError = JSON.parse(responseText);
-          errorMsg = `❌ Backend Error: ${
+          errorMsg = `❌ Server Error: ${
             parsedError.message || responseText || "Unknown error"
           }`;
         } catch (e) {
-          errorMsg = `❌ Backend Error: ${
+          errorMsg = `❌ Server Error: ${
             responseText || `Status ${responseStatus}`
           }`;
         }
         return interaction.editReply({
-          embeds: [buildErrorEmbed("❌ Backend Error", errorMsg)],
+          embeds: [buildErrorEmbed("🌐 Server Error", errorMsg)],
         });
       }
 
@@ -187,8 +187,8 @@ module.exports = {
         return interaction.editReply({
           embeds: [
             buildErrorEmbed(
-              "❌ Invalid Backend Response",
-              "We received an unexpected response from the backend. Please try again or contact an admin."
+              "📡 Invalid Server Response",
+              "We received an unexpected response from the server. Please try again or contact an admin."
             ),
           ],
         });
@@ -203,39 +203,36 @@ module.exports = {
         return interaction.editReply({
           embeds: [
             buildErrorEmbed(
-              "❌ Submission Failed",
-              result.message || "Unknown backend error or missing details."
+              "🚫 Submission Failed",
+              result.message ||
+                "An unknown error occurred while saving your data. Please try again."
             ),
           ],
         });
       }
 
-      // ✅ SUCCESS
       const successEmbed = new EmbedBuilder()
         .setColor(0x00cc66)
         .setTitle("✅ Submission Successful!")
         .setDescription(
-          "Your Pre-KvK submission has been received and recorded."
+          "Thank you! Your Pre-KvK data has been received and is now being processed."
         )
         .addFields(
           {
-            name: "Governor ID",
+            name: "🆔 Governor ID",
             value: `\`${governorIdInput}\``,
             inline: true,
           },
           {
-            name: "Status",
-            value: result.details || "Data recorded",
+            name: "📄 Status",
+            value: result.details || "Successfully saved",
             inline: true,
           }
         )
         .setTimestamp()
         .setFooter({ text: `User: ${interaction.user.username}` });
 
-      await interaction.editReply({
-        content: "",
-        embeds: [successEmbed],
-      });
+      return interaction.editReply({ embeds: [successEmbed], content: "" });
     } catch (error) {
       console.error(
         `[ERROR] UNEXPECTED ERROR for user ${interaction.user.id}:`,
@@ -246,7 +243,7 @@ module.exports = {
           .setColor(0xff0000)
           .setTitle("❌ Unexpected Error")
           .setDescription(
-            "Something went wrong while processing your Pre-KvK submission.\nPlease try again later or contact an admin for help."
+            "Something went wrong while processing your Pre-KvK submission. Please try again later or contact an admin."
           )
           .setTimestamp()
           .setFooter({ text: `User: ${interaction.user.username}` });
