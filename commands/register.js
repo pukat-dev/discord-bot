@@ -1,4 +1,4 @@
-// register.js (English, Non-Interactive Version)
+// register.js (Fixed Option Order, English, Non-Interactive Version)
 
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const fetch = require("node-fetch"); // Ensure node-fetch v2 is installed
@@ -7,38 +7,51 @@ module.exports = {
   // Command definition with options for all inputs
   data: new SlashCommandBuilder()
     .setName("register")
-    .setDescription("Registers a new main or farm account (non-interactive).") // English description
-    .addStringOption((option) =>
-      option
-        .setName("account_type")
-        .setDescription("Select the account type (main/farm)") // English option description
-        .setRequired(true)
-        .addChoices(
-          // Limit input choices
-          { name: "Main", value: "main" },
-          { name: "Farm", value: "farm" }
-        )
+    .setDescription("Registers a new main or farm account (non-interactive).")
+    .addStringOption(
+      (
+        option // REQUIRED
+      ) =>
+        option
+          .setName("account_type")
+          .setDescription("Select the account type (main/farm)")
+          .setRequired(true)
+          .addChoices(
+            { name: "Main", value: "main" },
+            { name: "Farm", value: "farm" }
+          )
     )
-    .addStringOption((option) =>
-      option
-        .setName("detail")
-        .setDescription(
-          "Main: Status (Old Player/Migrants), Farm: Linked Main ID"
-        ) // English option description
-        .setRequired(true)
+    .addStringOption(
+      (
+        option // REQUIRED
+      ) =>
+        option
+          .setName("detail")
+          .setDescription(
+            "Main: Status (Old Player/Migrants), Farm: Linked Main ID"
+          )
+          .setRequired(true)
     )
-    .addBooleanOption((option) =>
-      option
-        .setName("is_filler")
-        .setDescription("Farm Only: Is this a filler account? (Defaults to No)") // English option description
-        .setRequired(false)
-    ) // Not required, defaults to false
-    .addAttachmentOption((option) =>
-      option
-        .setName("screenshot")
-        .setDescription("Screenshot of your Governor Profile") // English option description
-        .setRequired(true)
-    ), // Make it required
+    .addAttachmentOption(
+      (
+        option // REQUIRED - Moved before optional options
+      ) =>
+        option
+          .setName("screenshot")
+          .setDescription("Screenshot of your Governor Profile")
+          .setRequired(true)
+    )
+    .addBooleanOption(
+      (
+        option // OPTIONAL - Moved after all required options
+      ) =>
+        option
+          .setName("is_filler")
+          .setDescription(
+            "Farm Only: Is this a filler account? (Defaults to No)"
+          )
+          .setRequired(false)
+    ), // Explicitly false, though default is false
 
   /**
    * Simplified execute function.
@@ -48,16 +61,14 @@ module.exports = {
    */
   async execute(interaction, appsScriptUrl) {
     // 1. Defer reply to allow time for processing
-    //    Use ephemeral if you don't want the initial command visible to everyone
-    //    await interaction.deferReply({ ephemeral: true });
-    //    Or defer publicly if the initial confirmation is okay to be visible
     await interaction.deferReply();
     console.log(`[DEBUG] Interaction deferred for non-interactive /register.`);
 
     // 2. Get data from Command Options
     const accountType = interaction.options.getString("account_type");
     const detail = interaction.options.getString("detail");
-    const isFiller = interaction.options.getBoolean("is_filler") ?? false; // Default to false if not provided
+    // Get optional boolean AFTER required options
+    const isFiller = interaction.options.getBoolean("is_filler") ?? false;
     const screenshotAttachment =
       interaction.options.getAttachment("screenshot");
     const userId = interaction.user.id;
@@ -77,7 +88,6 @@ module.exports = {
       });
       return;
     }
-    // Make status validation case-insensitive
     const lowerDetail = detail.toLowerCase();
     if (
       accountType === "main" &&
@@ -90,7 +100,6 @@ module.exports = {
       });
       return;
     }
-    // Get the original status (with capitalization) to send
     const mainStatus =
       accountType === "main"
         ? lowerDetail === "old player"
@@ -110,20 +119,18 @@ module.exports = {
     const registrationData = {
       discordUserId: userId,
       discordUsername: username,
-      tipeAkun: accountType, // Keep backend key if needed, or change to accountType
+      tipeAkun: accountType,
       attachmentUrl: screenshotAttachment.url,
-      // Add other data based on account type
-      ...(accountType === "main" && { statusMain: mainStatus }), // Keep backend key if needed
+      ...(accountType === "main" && { statusMain: mainStatus }),
       ...(accountType === "farm" && {
         isFiller: isFiller,
         idMainTerhubung: detail,
-      }), // Keep backend key if needed
+      }),
     };
 
     // 5. Display Simple Confirmation (Optional, Non-Interactive)
-    //    Edits the deferred reply
     const confirmEmbed = new EmbedBuilder()
-      .setColor(0x0099ff) // Blue for processing
+      .setColor(0x0099ff)
       .setTitle(
         `⏳ Processing Registration: ${
           accountType === "main" ? "Main" : "Farm"
@@ -136,7 +143,6 @@ module.exports = {
           value: accountType === "main" ? "Main" : "Farm",
           inline: true,
         },
-        // Add fields based on account type from registrationData
         ...(accountType === "main"
           ? [
               {
@@ -169,11 +175,10 @@ module.exports = {
       .setTimestamp()
       .setFooter({ text: "Please wait..." });
 
-    await interaction.editReply({ embeds: [confirmEmbed] }); // Edit the deferred reply
+    await interaction.editReply({ embeds: [confirmEmbed] });
 
     // 6. Process Backend Submission (Apps Script)
     try {
-      // Fetch image as base64 (if the backend requires it)
       console.log(
         `[DEBUG] Fetching image from URL: ${registrationData.attachmentUrl}`
       );
@@ -190,10 +195,10 @@ module.exports = {
       );
 
       const finalPayload = {
-        command: "register", // Adjust to match backend expectation
+        command: "register",
         data: {
-          ...registrationData, // Include prepared data
-          imageBase64: imageBase64, // Add base64 if needed
+          ...registrationData,
+          imageBase64: imageBase64,
         },
       };
 
@@ -202,14 +207,10 @@ module.exports = {
       );
       const appsScriptResponse = await fetch(appsScriptUrl, {
         method: "POST",
-        // Important: Set Content-Type header to 'application/json' when sending JSON
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(finalPayload), // Send payload as JSON string
-        // Add timeout if needed
-        // timeout: 30000 // 30 seconds
+        body: JSON.stringify(finalPayload),
       });
 
-      // Read response as text first for debugging
       const resultText = await appsScriptResponse.text();
       console.log(
         `[DEBUG] Apps Script Response Status: ${appsScriptResponse.status}`
@@ -217,22 +218,20 @@ module.exports = {
       console.log(`[DEBUG] Apps Script Response Text: ${resultText}`);
 
       if (!appsScriptResponse.ok) {
-        // Try parsing as JSON if error, might contain an error message
         let errorMsg = `Backend Error (${appsScriptResponse.status})`;
         try {
           const errorJson = JSON.parse(resultText);
           if (errorJson.message) {
             errorMsg += `: ${errorJson.message}`;
           } else {
-            errorMsg += `: ${resultText.substring(0, 200)}`; // Show partial text if not JSON
+            errorMsg += `: ${resultText.substring(0, 200)}`;
           }
         } catch (parseErr) {
-          errorMsg += `: ${resultText.substring(0, 200)}`; // Show partial text if parse failed
+          errorMsg += `: ${resultText.substring(0, 200)}`;
         }
         throw new Error(errorMsg);
       }
 
-      // Try parsing successful response as JSON
       let result;
       try {
         result = JSON.parse(resultText);
@@ -248,16 +247,14 @@ module.exports = {
       }
 
       // 7. Display Final Result (Success)
-      //    Use followUp since there was an initial reply (editReply)
       if (result.status === "success" && result.details) {
         const successEmbed = new EmbedBuilder()
-          .setColor(0x00ff00) // Green for success
+          .setColor(0x00ff00)
           .setTitle("✅ Registration Successful!")
           .setDescription(
             result.message ||
               "Your registration has been processed successfully."
           )
-          // Add details from result.details as before
           .addFields(
             {
               name: "Governor ID",
@@ -303,13 +300,11 @@ module.exports = {
           );
         }
         successEmbed.setTimestamp();
-
         await interaction.followUp({ embeds: [successEmbed] });
         console.log(
           `[INFO] Non-interactive registration successful for user ${userId}.`
         );
       } else {
-        // If status isn't 'success' or 'details' is missing
         console.error(
           "[ERROR] Registration failed according to Apps Script response:",
           result
@@ -326,14 +321,11 @@ module.exports = {
         "[ERROR] Error processing non-interactive registration:",
         error
       );
-      // Send error message using followUp
-      // Ensure the error message is informative enough
       const errorMessage = `❌ An error occurred while processing your registration: ${error.message}`;
       try {
         await interaction.followUp({ content: errorMessage, ephemeral: true });
       } catch (followUpError) {
         console.error("[ERROR] Failed to send error follow-up:", followUpError);
-        // If followUp fails, try editing the initial reply (though it might have been edited already)
         await interaction
           .editReply({ content: errorMessage, embeds: [], components: [] })
           .catch((editErr) =>
