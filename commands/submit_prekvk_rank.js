@@ -225,7 +225,7 @@ module.exports = {
           },
           {
             name: "📄 Status",
-            value: result.details || "Successfully saved",
+            value: result.message || "Successfully saved",
             inline: true,
           }
         )
