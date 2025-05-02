@@ -164,7 +164,7 @@ module.exports = {
       } at ${new Date().toISOString()}`
     );
 
-    const registrationChannelId = "YOUR_REGISTRATION_CHANNEL_ID";
+    const registrationChannelId = "YOUR_REGISTRATION_CHANNEL_ID"; // Ganti dengan ID channel Anda
 
     try {
       console.log(`[/mystats] Attempting deferReply...`);
@@ -529,7 +529,7 @@ module.exports = {
           });
         }
 
-        // *** PERUBAHAN DI SINI: Tampilkan rank dengan fallback N/A (Data Missing) ***
+        // Tampilkan rank dengan fallback N/A (Data Missing)
         statsEmbed.addFields(
           separator,
           {
@@ -546,7 +546,6 @@ module.exports = {
             inline: true,
           }
         );
-        // *** Akhir Perubahan Ranking ***
 
         console.log(`[/mystats] Sending final embed for ${governorId}`);
         await interaction.editReply({
